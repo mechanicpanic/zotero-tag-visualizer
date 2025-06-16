@@ -26,6 +26,7 @@ app = dash.Dash(__name__, external_stylesheets=[dbc.themes.BOOTSTRAP],
                 suppress_callback_exceptions=True)
 
 app.layout = dbc.Container([
+    # Header
     dbc.Row([
         dbc.Col([
             html.H1("Zotero Tag Cloud Visualizer", className="text-center mb-4"),
@@ -33,42 +34,57 @@ app.layout = dbc.Container([
         ])
     ]),
     
-    # Connection Type Selection
+    # Main Layout: Left sidebar + Right content
     dbc.Row([
+        # Left Sidebar - Connection & Configuration
         dbc.Col([
+            # Connection Type Selection
             dbc.Card([
                 dbc.CardHeader("Connection Type"),
                 dbc.CardBody([
                     dbc.RadioItems(
                         id="connection-type",
                         options=[
-                            {"label": "Local Zotero Instance (Faster)", "value": "local"},
-                            {"label": "Web API (Internet Required)", "value": "web"}
+                            {"label": "Local Zotero", "value": "local"},
+                            {"label": "Web API", "value": "web"}
                         ],
-                        value="local",
-                        inline=True
+                        value="local"
                     ),
                     html.Div(id="connection-status", className="mt-2")
                 ])
-            ], className="mb-3")
-        ])
-    ]),
-    
-    # Configuration Panel
-    dbc.Row([
-        dbc.Col([
+            ], className="mb-3"),
+            
+            # Configuration Panel
             dbc.Card([
-                dbc.CardHeader("Zotero Configuration"),
+                dbc.CardHeader("Configuration"),
                 dbc.CardBody([
                     html.Div(id="config-panel")
                 ])
-            ], className="mb-4")
-        ])
-    ]),
-    
-    # Progress Section
-    dbc.Row([
+            ], className="mb-3"),
+            
+            # Cache Management
+            dbc.Card([
+                dbc.CardHeader("Cache & Storage"),
+                dbc.CardBody([
+                    html.Div(id="cache-stats", className="mb-2"),
+                    dbc.ButtonGroup([
+                        dbc.Button("Use Cache", id="use-cache-btn", color="success", size="sm"),
+                        dbc.Button("Clear", id="clear-cache-btn", color="warning", size="sm"),
+                        dbc.Button("Refresh", id="refresh-cache-btn", color="info", size="sm")
+                    ], className="mb-2"),
+                    dbc.Label("Recent Libraries:", className="small"),
+                    dcc.Dropdown(
+                        id="recent-libraries",
+                        placeholder="Select recent...",
+                        options=[]
+                    )
+                ])
+            ], className="mb-3")
+        ], width=3),
+        
+        # Center Content - Tag Cloud
         dbc.Col([
+            # Progress Section
             html.Div([
                 dbc.Progress(
                     id="progress-bar",
@@ -78,47 +94,27 @@ app.layout = dbc.Container([
                     style={"display": "none"}
                 ),
                 html.Div(id="progress-text", className="mt-2")
-            ], id="progress-section")
-        ])
-    ]),
-    
-    # Cache Management Section
-    dbc.Row([
+            ], id="progress-section", className="mb-3"),
+            
+            # Tag Cloud
+            dcc.Loading(
+                id="loading",
+                children=[
+                    html.Div(id="status-message", className="mb-3"),
+                    html.Div(id="tag-cloud-container")
+                ]
+            ),
+            html.Div(id="tag-statistics", className="mt-3")
+        ], width=6),
+        
+        # Right Sidebar - Advanced Filters & Analysis
         dbc.Col([
-            dbc.Card([
-                dbc.CardHeader("Cache & Storage"),
-                dbc.CardBody([
-                    dbc.Row([
-                        dbc.Col([
-                            html.Div(id="cache-stats"),
-                            dbc.ButtonGroup([
-                                dbc.Button("Use Cache", id="use-cache-btn", color="success", size="sm"),
-                                dbc.Button("Clear Cache", id="clear-cache-btn", color="warning", size="sm"),
-                                dbc.Button("Refresh", id="refresh-cache-btn", color="info", size="sm")
-                            ])
-                        ], width=8),
-                        dbc.Col([
-                            dbc.Label("Recent Libraries:"),
-                            dcc.Dropdown(
-                                id="recent-libraries",
-                                placeholder="Select a recent library...",
-                                options=[]
-                            )
-                        ], width=4)
-                    ])
-                ])
-            ], className="mb-4")
-        ])
-    ]),
-    
-    # Advanced Filters Panel
-    dbc.Row([
-        dbc.Col([
+            # Advanced Filters Panel
             dbc.Card([
                 dbc.CardHeader([
-                    html.H5("Advanced Filters", className="mb-0"),
+                    html.H6("Advanced Filters", className="mb-0"),
                     dbc.Button(
-                        "Show/Hide Advanced Options",
+                        "Show/Hide",
                         id="toggle-advanced-filters",
                         color="link",
                         size="sm",
@@ -127,191 +123,175 @@ app.layout = dbc.Container([
                 ]),
                 dbc.CardBody([
                     # Basic Filters (Always Visible)
+                    dbc.Label("Search Tags:", className="small"),
+                    dbc.Input(
+                        id="search-input",
+                        type="text",
+                        placeholder="Search tags...",
+                        value="",
+                        size="sm",
+                        className="mb-2"
+                    ),
+                    
                     dbc.Row([
                         dbc.Col([
-                            dbc.Label("Search Tags:"),
-                            dbc.Input(
-                                id="search-input",
-                                type="text",
-                                placeholder="Search for specific tags...",
-                                value=""
-                            )
-                        ], width=4),
-                        dbc.Col([
-                            dbc.Label("Min Frequency:"),
+                            dbc.Label("Min Freq:", className="small"),
                             dbc.Input(
                                 id="min-freq",
                                 type="number",
                                 min=1,
-                                value=1
+                                value=1,
+                                size="sm"
                             )
-                        ], width=2),
+                        ], width=6),
                         dbc.Col([
-                            dbc.Label("Max Frequency:"),
+                            dbc.Label("Max Freq:", className="small"),
                             dbc.Input(
                                 id="max-freq",
                                 type="number",
                                 min=1,
-                                placeholder="Leave empty for no limit"
+                                placeholder="Max",
+                                size="sm"
                             )
-                        ], width=2),
-                        dbc.Col([
-                            dbc.Label("Max Tags:"),
-                            dbc.Input(
-                                id="max-tags",
-                                type="number",
-                                min=10,
-                                max=200,
-                                value=50
-                            )
-                        ], width=2),
-                        dbc.Col([
-                            html.Br(),
-                            dbc.Button(
-                                "Apply Filters",
-                                id="apply-filters-btn",
-                                color="info"
-                            )
-                        ], width=2)
-                    ], className="mb-3"),
+                        ], width=6)
+                    ], className="mb-2"),
+                    
+                    dbc.Label("Max Tags:", className="small"),
+                    dbc.Input(
+                        id="max-tags",
+                        type="number",
+                        min=10,
+                        max=200,
+                        value=50,
+                        size="sm",
+                        className="mb-2"
+                    ),
+                    
+                    dbc.Button(
+                        "Apply Filters",
+                        id="apply-filters-btn",
+                        color="info",
+                        size="sm",
+                        className="mb-3"
+                    ),
                     
                     # Advanced Filters (Collapsible)
                     dbc.Collapse([
                         html.Hr(),
-                        dbc.Row([
-                            dbc.Col([
-                                dbc.Label("Item Types:"),
-                                dcc.Dropdown(
-                                    id="item-types-filter",
-                                    placeholder="Select item types...",
-                                    multi=True,
-                                    options=[]
-                                )
-                            ], width=4),
-                            dbc.Col([
-                                dbc.Label("Publication Year Range:"),
-                                dbc.Row([
-                                    dbc.Col([
-                                        dbc.Input(
-                                            id="start-year",
-                                            type="number",
-                                            placeholder="Start year",
-                                            min=1900,
-                                            max=2030
-                                        )
-                                    ], width=6),
-                                    dbc.Col([
-                                        dbc.Input(
-                                            id="end-year",
-                                            type="number",
-                                            placeholder="End year",
-                                            min=1900,
-                                            max=2030
-                                        )
-                                    ], width=6)
-                                ])
-                            ], width=4),
-                            dbc.Col([
-                                dbc.Label("Languages:"),
-                                dcc.Dropdown(
-                                    id="languages-filter",
-                                    placeholder="Select languages...",
-                                    multi=True,
-                                    options=[]
-                                )
-                            ], width=4)
-                        ], className="mb-3"),
+                        dbc.Label("Item Types:", className="small"),
+                        dcc.Dropdown(
+                            id="item-types-filter",
+                            placeholder="Select types...",
+                            multi=True,
+                            options=[]
+                        ),
+                        html.Br(),
                         
+                        dbc.Label("Year Range:", className="small"),
                         dbc.Row([
                             dbc.Col([
-                                dbc.Label("Collections:"),
-                                dcc.Dropdown(
-                                    id="collections-filter",
-                                    placeholder="Select collections...",
-                                    multi=True,
-                                    options=[]
-                                )
-                            ], width=4),
-                            dbc.Col([
-                                dbc.Label("Creator/Author:"),
                                 dbc.Input(
-                                    id="creator-filter",
-                                    type="text",
-                                    placeholder="Search by author name..."
+                                    id="start-year",
+                                    type="number",
+                                    placeholder="Start",
+                                    min=1900,
+                                    max=2030,
+                                    size="sm"
                                 )
-                            ], width=4),
+                            ], width=6),
                             dbc.Col([
-                                dbc.Label("Boolean Tag Query:"),
                                 dbc.Input(
-                                    id="boolean-query",
-                                    type="text",
-                                    placeholder="e.g., python AND (machine OR learning)"
+                                    id="end-year",
+                                    type="number",
+                                    placeholder="End",
+                                    min=1900,
+                                    max=2030,
+                                    size="sm"
                                 )
-                            ], width=4)
-                        ], className="mb-3"),
+                            ], width=6)
+                        ], className="mb-2"),
+                        
+                        dbc.Label("Languages:", className="small"),
+                        dcc.Dropdown(
+                            id="languages-filter",
+                            placeholder="Select languages...",
+                            multi=True,
+                            options=[]
+                        ),
+                        html.Br(),
+                        
+                        dbc.Label("Collections:", className="small"),
+                        dcc.Dropdown(
+                            id="collections-filter",
+                            placeholder="Select collections...",
+                            multi=True,
+                            options=[]
+                        ),
+                        html.Br(),
+                        
+                        dbc.Label("Creator/Author:", className="small"),
+                        dbc.Input(
+                            id="creator-filter",
+                            type="text",
+                            placeholder="Author name...",
+                            size="sm",
+                            className="mb-2"
+                        ),
+                        
+                        dbc.Label("Boolean Query:", className="small"),
+                        dbc.Input(
+                            id="boolean-query",
+                            type="text",
+                            placeholder="python AND learning",
+                            size="sm",
+                            className="mb-2"
+                        ),
                         
                         # Filter Presets and Actions
-                        dbc.Row([
-                            dbc.Col([
-                                dbc.Label("Filter Presets:"),
-                                dcc.Dropdown(
-                                    id="filter-presets",
-                                    placeholder="Load a saved filter...",
-                                    options=[]
-                                )
-                            ], width=4),
-                            dbc.Col([
-                                html.Br(),
-                                dbc.ButtonGroup([
-                                    dbc.Button("Save Current Filter", id="save-filter-btn", color="success", size="sm"),
-                                    dbc.Button("Clear All Filters", id="clear-filters-btn", color="warning", size="sm"),
-                                    dbc.Button("Export Results", id="export-results-btn", color="info", size="sm")
-                                ])
-                            ], width=8)
+                        dbc.Label("Presets:", className="small"),
+                        dcc.Dropdown(
+                            id="filter-presets",
+                            placeholder="Load preset...",
+                            options=[]
+                        ),
+                        html.Br(),
+                        
+                        dbc.ButtonGroup([
+                            dbc.Button("Save", id="save-filter-btn", color="success", size="sm"),
+                            dbc.Button("Clear", id="clear-filters-btn", color="warning", size="sm"),
+                            dbc.Button("Export", id="export-results-btn", color="info", size="sm")
                         ])
                     ], id="advanced-filters-collapse", is_open=False)
                 ])
-            ], className="mb-4")
-        ])
-    ]),
-    
-    # Collection Browser Panel
-    dbc.Row([
-        dbc.Col([
+            ], className="mb-3"),
+            
+            # Collection Browser Panel
             dbc.Card([
-                dbc.CardHeader("Collection Browser"),
+                dbc.CardHeader("Collections"),
                 dbc.CardBody([
-                    dbc.Row([
-                        dbc.Col([
-                            dcc.Dropdown(
-                                id="collection-browser",
-                                placeholder="Browse collections...",
-                                options=[]
-                            )
-                        ], width=8),
-                        dbc.Col([
-                            dbc.Button(
-                                "Load Collection Tags",
-                                id="load-collection-tags-btn",
-                                color="primary",
-                                disabled=True
-                            )
-                        ], width=4)
-                    ]),
+                    dcc.Dropdown(
+                        id="collection-browser",
+                        placeholder="Browse collections...",
+                        options=[]
+                    ),
+                    html.Br(),
+                    dbc.Button(
+                        "Load Collection",
+                        id="load-collection-tags-btn",
+                        color="primary",
+                        size="sm",
+                        disabled=True
+                    ),
                     html.Div(id="collection-info", className="mt-2")
                 ])
-            ], className="mb-4")
-        ])
-    ]),
-    
-    # Tag Analysis Panel
-    dbc.Row([
-        dbc.Col([
+            ], className="mb-3"),
+            
+            # Tag Analysis Panel
             dbc.Card([
                 dbc.CardHeader([
-                    html.H5("Tag Analysis & Suggestions", className="mb-0"),
+                    html.H6("Tag Analysis", className="mb-0"),
                     dbc.Button(
-                        "Show/Hide Analysis",
+                        "Show/Hide",
                         id="toggle-tag-analysis",
                         color="link",
                         size="sm",
@@ -320,64 +300,35 @@ app.layout = dbc.Container([
                 ]),
                 dbc.CardBody([
                     dbc.Collapse([
-                        dbc.Row([
-                            dbc.Col([
-                                dbc.Label("Analyze Tag Relationships:"),
-                                dbc.Input(
-                                    id="tag-analysis-input",
-                                    type="text",
-                                    placeholder="Enter a tag to analyze (e.g., 'machine learning')",
-                                    value=""
-                                ),
-                                html.Br(),
-                                dbc.Button(
-                                    "Analyze Co-occurrences",
-                                    id="analyze-cooccurrence-btn",
-                                    color="primary",
-                                    size="sm"
-                                )
-                            ], width=6),
-                            dbc.Col([
-                                dbc.Label("Filter Suggestions:"),
-                                html.Div(id="filter-suggestions", className="mt-2")
-                            ], width=6)
-                        ], className="mb-3"),
-                        
+                        dbc.Label("Tag Relationships:", className="small"),
+                        dbc.Input(
+                            id="tag-analysis-input",
+                            type="text",
+                            placeholder="Analyze tag (e.g., 'machine learning')",
+                            value="",
+                            size="sm"
+                        ),
+                        html.Br(),
+                        dbc.Button(
+                            "Analyze",
+                            id="analyze-cooccurrence-btn",
+                            color="primary",
+                            size="sm"
+                        ),
                         html.Hr(),
                         
-                        # Co-occurrence results
-                        dbc.Row([
-                            dbc.Col([
-                                html.H6("Related Tags:", className="mb-2"),
-                                html.Div(id="cooccurrence-results")
-                            ], width=6),
-                            dbc.Col([
-                                html.H6("Tag Hierarchy:", className="mb-2"),
-                                html.Div(id="tag-hierarchy-results")
-                            ], width=6)
-                        ])
+                        dbc.Label("Suggestions:", className="small"),
+                        html.Div(id="filter-suggestions", className="mb-2"),
+                        
+                        html.H6("Related Tags:", className="small mb-1"),
+                        html.Div(id="cooccurrence-results", className="mb-2"),
+                        
+                        html.H6("Hierarchy:", className="small mb-1"),
+                        html.Div(id="tag-hierarchy-results")
                     ], id="tag-analysis-collapse", is_open=False)
                 ])
-            ], className="mb-4")
-        ])
-    ]),
-    
-    dbc.Row([
-        dbc.Col([
-            dcc.Loading(
-                id="loading",
-                children=[
-                    html.Div(id="status-message", className="mb-3"),
-                    html.Div(id="tag-cloud-container")
-                ]
-            )
-        ])
-    ]),
-    
-    dbc.Row([
-        dbc.Col([
-            html.Div(id="tag-statistics", className="mt-4")
-        ])
+            ], className="mb-3")
+        ], width=3)
     ]),
     
     # Store components for data persistence
@@ -388,7 +339,7 @@ app.layout = dbc.Container([
     dcc.Store(id="filter-presets-data"),  # Store for saved filter presets
     dcc.Store(id="items-metadata"),  # Store for items metadata
     dcc.Interval(id="progress-interval", interval=1000, n_intervals=0, disabled=True)
-])
+], fluid=True)
 
 # Callback to update connection status and config panel
 @callback(
@@ -916,7 +867,8 @@ def manage_filter_presets(save_clicks, search_term, min_freq, max_freq, boolean_
 @callback(
     [Output("filter-presets-data", "data", allow_duplicate=True),
      Output("filter-presets", "options", allow_duplicate=True)],
-    Input("tags-data", "data")  # Trigger when tags are first loaded
+    Input("tags-data", "data"),  # Trigger when tags are first loaded
+    prevent_initial_call=True
 )
 def initialize_filter_presets(tags_data):
     """Initialize filter presets from database on app start"""
