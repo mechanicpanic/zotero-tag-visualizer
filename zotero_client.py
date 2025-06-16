@@ -1,6 +1,7 @@
 from pyzotero import zotero
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Union
 import time
+import re
 
 class ZoteroClient:
     def __init__(self, library_id: str, library_type: str, api_key: str):
@@ -151,3 +152,281 @@ class ZoteroClient:
         except Exception as e:
             print(f"Connection test failed: {e}")
             return False
+    
+    def get_collections(self) -> List[Dict]:
+        """
+        Retrieve all collections from the library
+        
+        Returns:
+            List of collection dictionaries with id, name, parentCollection
+        """
+        try:
+            collections = self.zot.collections()
+            print(f"DEBUG: Retrieved {len(collections)} collections")
+            return collections
+        except Exception as e:
+            print(f"ERROR: Error fetching collections: {e}")
+            return []
+    
+    def get_top_level_collections(self) -> List[Dict]:
+        """
+        Retrieve only top-level collections (no parent)
+        
+        Returns:
+            List of top-level collection dictionaries
+        """
+        try:
+            collections = self.zot.collections_top()
+            print(f"DEBUG: Retrieved {len(collections)} top-level collections")
+            return collections
+        except Exception as e:
+            print(f"ERROR: Error fetching top-level collections: {e}")
+            return []
+    
+    def get_collection_items(self, collection_key: str) -> List[Dict]:
+        """
+        Get all items in a specific collection
+        
+        Args:
+            collection_key: Zotero collection key
+            
+        Returns:
+            List of items in the collection
+        """
+        try:
+            items = self.zot.everything(self.zot.collection_items(collection_key))
+            print(f"DEBUG: Retrieved {len(items)} items from collection {collection_key}")
+            return items
+        except Exception as e:
+            print(f"ERROR: Error fetching items from collection {collection_key}: {e}")
+            return []
+    
+    def search_items(self, 
+                    query: str = None,
+                    item_type: str = None,
+                    tags: Union[str, List[str]] = None,
+                    qmode: str = 'titleCreatorYear',
+                    since: int = None,
+                    sort: str = 'dateModified',
+                    direction: str = 'desc',
+                    limit: int = 100) -> List[Dict]:
+        """
+        Advanced search for items with multiple parameters
+        
+        Args:
+            query: Search query string
+            item_type: Item type filter (supports Boolean: 'book || article')
+            tags: Tag filter (string or list, supports Boolean)
+            qmode: Search mode ('titleCreatorYear' or 'everything')
+            since: Library version to filter by modification date
+            sort: Sort field (dateAdded, dateModified, title, creator, etc.)
+            direction: Sort direction ('asc' or 'desc')
+            limit: Maximum results to return
+            
+        Returns:
+            List of matching items
+        """
+        try:
+            search_params = {}
+            
+            # Add search parameters
+            if query:
+                search_params['q'] = query
+                search_params['qmode'] = qmode
+            
+            if item_type:
+                search_params['itemType'] = item_type
+            
+            if tags:
+                if isinstance(tags, list):
+                    # For list of tags, create AND query
+                    search_params['tag'] = tags
+                else:
+                    # For string, support Boolean operators
+                    search_params['tag'] = tags
+            
+            if since:
+                search_params['since'] = since
+            
+            # Sorting and pagination
+            search_params['sort'] = sort
+            search_params['direction'] = direction
+            search_params['limit'] = limit
+            
+            print(f"DEBUG: Searching items with parameters: {search_params}")
+            
+            # Use everything() to get all results if needed
+            if limit > 100:
+                items = self.zot.everything(self.zot.items(**search_params))
+            else:
+                items = self.zot.items(**search_params)
+            
+            print(f"DEBUG: Found {len(items)} items matching search criteria")
+            return items
+            
+        except Exception as e:
+            print(f"ERROR: Error searching items: {e}")
+            return []
+    
+    def get_items_by_tag_boolean(self, tag_query: str) -> List[Dict]:
+        """
+        Search items using Boolean tag operations
+        
+        Args:
+            tag_query: Boolean tag query (e.g., 'python || programming', 'research && -draft')
+            
+        Returns:
+            List of matching items
+        """
+        try:
+            items = self.search_items(tags=tag_query)
+            return items
+        except Exception as e:
+            print(f"ERROR: Error in Boolean tag search: {e}")
+            return []
+    
+    def get_items_by_date_range(self, 
+                               start_year: int = None, 
+                               end_year: int = None,
+                               item_types: List[str] = None) -> List[Dict]:
+        """
+        Get items filtered by publication date range
+        
+        Args:
+            start_year: Earliest publication year
+            end_year: Latest publication year  
+            item_types: List of item types to include
+            
+        Returns:
+            List of items within date range
+        """
+        try:
+            # Get all items first, then filter by date
+            # Note: Zotero API doesn't directly support date range filtering
+            search_params = {}
+            
+            if item_types:
+                # Create Boolean OR query for multiple item types
+                if len(item_types) == 1:
+                    search_params['itemType'] = item_types[0]
+                else:
+                    search_params['itemType'] = ' || '.join(item_types)
+            
+            items = self.zot.everything(self.zot.items(**search_params))
+            
+            # Filter by date range locally
+            filtered_items = []
+            for item in items:
+                if 'data' in item and 'date' in item['data']:
+                    date_str = item['data']['date']
+                    if date_str:
+                        # Extract year from date string (handles various formats)
+                        year_match = re.search(r'\b(19|20)\d{2}\b', date_str)
+                        if year_match:
+                            year = int(year_match.group())
+                            
+                            # Check if year is within range
+                            if start_year and year < start_year:
+                                continue
+                            if end_year and year > end_year:
+                                continue
+                            
+                            filtered_items.append(item)
+            
+            print(f"DEBUG: Filtered {len(filtered_items)} items by date range {start_year}-{end_year}")
+            return filtered_items
+            
+        except Exception as e:
+            print(f"ERROR: Error filtering by date range: {e}")
+            return []
+    
+    def get_tags_for_collection(self, collection_key: str) -> Dict[str, int]:
+        """
+        Get tag frequencies for items in a specific collection
+        
+        Args:
+            collection_key: Zotero collection key
+            
+        Returns:
+            Dictionary mapping tag names to frequencies within the collection
+        """
+        try:
+            # Get items in collection
+            items = self.get_collection_items(collection_key)
+            
+            # Count tag frequencies
+            tag_freq = {}
+            for item in items:
+                if 'data' in item and 'tags' in item['data']:
+                    for tag_info in item['data']['tags']:
+                        tag_name = tag_info.get('tag', '') if isinstance(tag_info, dict) else str(tag_info)
+                        if tag_name:
+                            tag_freq[tag_name] = tag_freq.get(tag_name, 0) + 1
+            
+            print(f"DEBUG: Found {len(tag_freq)} unique tags in collection {collection_key}")
+            return tag_freq
+            
+        except Exception as e:
+            print(f"ERROR: Error getting tags for collection: {e}")
+            return {}
+    
+    def get_item_metadata_summary(self) -> Dict[str, any]:
+        """
+        Get a summary of available metadata in the library
+        
+        Returns:
+            Dictionary with metadata statistics (item types, years, creators, etc.)
+        """
+        try:
+            # Get a sample of items to analyze metadata
+            items = self.zot.items(limit=100)
+            
+            item_types = set()
+            years = set()
+            creators = set()
+            languages = set()
+            publishers = set()
+            
+            for item in items:
+                if 'data' in item:
+                    data = item['data']
+                    
+                    # Item type
+                    if 'itemType' in data:
+                        item_types.add(data['itemType'])
+                    
+                    # Publication year
+                    if 'date' in data and data['date']:
+                        year_match = re.search(r'\b(19|20)\d{2}\b', data['date'])
+                        if year_match:
+                            years.add(int(year_match.group()))
+                    
+                    # Creators
+                    if 'creators' in data:
+                        for creator in data['creators']:
+                            if 'lastName' in creator:
+                                creators.add(creator['lastName'])
+                    
+                    # Language
+                    if 'language' in data and data['language']:
+                        languages.add(data['language'])
+                    
+                    # Publisher
+                    if 'publisher' in data and data['publisher']:
+                        publishers.add(data['publisher'])
+            
+            summary = {
+                'item_types': sorted(list(item_types)),
+                'year_range': (min(years), max(years)) if years else (None, None),
+                'total_creators': len(creators),
+                'languages': sorted(list(languages)),
+                'total_publishers': len(publishers),
+                'sample_size': len(items)
+            }
+            
+            print(f"DEBUG: Metadata summary: {summary}")
+            return summary
+            
+        except Exception as e:
+            print(f"ERROR: Error getting metadata summary: {e}")
+            return {}

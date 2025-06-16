@@ -15,6 +15,7 @@ from zotero_client import ZoteroClient
 from tag_processor import TagProcessor
 from zotero_local_client import ZoteroLocalClient, detect_local_zotero
 from database import db
+from advanced_filters import AdvancedFilter, FilterCriteria, create_item_type_groups
 
 # Initialize background callback manager
 cache = diskcache.Cache("./cache")
@@ -110,11 +111,22 @@ app.layout = dbc.Container([
         ])
     ]),
     
+    # Advanced Filters Panel
     dbc.Row([
         dbc.Col([
             dbc.Card([
-                dbc.CardHeader("Filters"),
+                dbc.CardHeader([
+                    html.H5("Advanced Filters", className="mb-0"),
+                    dbc.Button(
+                        "Show/Hide Advanced Options",
+                        id="toggle-advanced-filters",
+                        color="link",
+                        size="sm",
+                        className="float-end"
+                    )
+                ]),
                 dbc.CardBody([
+                    # Basic Filters (Always Visible)
                     dbc.Row([
                         dbc.Col([
                             dbc.Label("Search Tags:"),
@@ -161,7 +173,132 @@ app.layout = dbc.Container([
                                 color="info"
                             )
                         ], width=2)
-                    ])
+                    ], className="mb-3"),
+                    
+                    # Advanced Filters (Collapsible)
+                    dbc.Collapse([
+                        html.Hr(),
+                        dbc.Row([
+                            dbc.Col([
+                                dbc.Label("Item Types:"),
+                                dcc.Dropdown(
+                                    id="item-types-filter",
+                                    placeholder="Select item types...",
+                                    multi=True,
+                                    options=[]
+                                )
+                            ], width=4),
+                            dbc.Col([
+                                dbc.Label("Publication Year Range:"),
+                                dbc.Row([
+                                    dbc.Col([
+                                        dbc.Input(
+                                            id="start-year",
+                                            type="number",
+                                            placeholder="Start year",
+                                            min=1900,
+                                            max=2030
+                                        )
+                                    ], width=6),
+                                    dbc.Col([
+                                        dbc.Input(
+                                            id="end-year",
+                                            type="number",
+                                            placeholder="End year",
+                                            min=1900,
+                                            max=2030
+                                        )
+                                    ], width=6)
+                                ])
+                            ], width=4),
+                            dbc.Col([
+                                dbc.Label("Languages:"),
+                                dcc.Dropdown(
+                                    id="languages-filter",
+                                    placeholder="Select languages...",
+                                    multi=True,
+                                    options=[]
+                                )
+                            ], width=4)
+                        ], className="mb-3"),
+                        
+                        dbc.Row([
+                            dbc.Col([
+                                dbc.Label("Collections:"),
+                                dcc.Dropdown(
+                                    id="collections-filter",
+                                    placeholder="Select collections...",
+                                    multi=True,
+                                    options=[]
+                                )
+                            ], width=4),
+                            dbc.Col([
+                                dbc.Label("Creator/Author:"),
+                                dbc.Input(
+                                    id="creator-filter",
+                                    type="text",
+                                    placeholder="Search by author name..."
+                                )
+                            ], width=4),
+                            dbc.Col([
+                                dbc.Label("Boolean Tag Query:"),
+                                dbc.Input(
+                                    id="boolean-query",
+                                    type="text",
+                                    placeholder="e.g., python AND (machine OR learning)"
+                                )
+                            ], width=4)
+                        ], className="mb-3"),
+                        
+                        # Filter Presets and Actions
+                        dbc.Row([
+                            dbc.Col([
+                                dbc.Label("Filter Presets:"),
+                                dcc.Dropdown(
+                                    id="filter-presets",
+                                    placeholder="Load a saved filter...",
+                                    options=[]
+                                )
+                            ], width=4),
+                            dbc.Col([
+                                html.Br(),
+                                dbc.ButtonGroup([
+                                    dbc.Button("Save Current Filter", id="save-filter-btn", color="success", size="sm"),
+                                    dbc.Button("Clear All Filters", id="clear-filters-btn", color="warning", size="sm"),
+                                    dbc.Button("Export Results", id="export-results-btn", color="info", size="sm")
+                                ])
+                            ], width=8)
+                        ])
+                    ], id="advanced-filters-collapse", is_open=False)
+                ])
+            ], className="mb-4")
+        ])
+    ]),
+    
+    # Collection Browser Panel
+    dbc.Row([
+        dbc.Col([
+            dbc.Card([
+                dbc.CardHeader("Collection Browser"),
+                dbc.CardBody([
+                    dbc.Row([
+                        dbc.Col([
+                            dcc.Dropdown(
+                                id="collection-browser",
+                                placeholder="Browse collections...",
+                                options=[]
+                            )
+                        ], width=8),
+                        dbc.Col([
+                            dbc.Button(
+                                "Load Collection Tags",
+                                id="load-collection-tags-btn",
+                                color="primary",
+                                disabled=True
+                            )
+                        ], width=4)
+                    ]),
+                    html.Div(id="collection-info", className="mt-2")
                 ])
             ], className="mb-4")
         ])

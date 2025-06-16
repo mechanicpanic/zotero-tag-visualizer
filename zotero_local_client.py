@@ -1,8 +1,9 @@
 import requests
 import json
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Union
 from urllib.parse import urljoin
 import time
+import re
 
 
 class ZoteroLocalClient:
@@ -322,6 +323,366 @@ class ZoteroLocalClient:
             info['error'] = f"Connection error: {str(e)}"
         
         return info
+    
+    def get_items_filtered(self, 
+                          collection_id: int = None,
+                          item_types: List[str] = None,
+                          tags: List[str] = None,
+                          start_year: int = None,
+                          end_year: int = None,
+                          search_query: str = None) -> List[Dict]:
+        """
+        Get items with advanced filtering
+        
+        Args:
+            collection_id: Filter by collection ID
+            item_types: List of item types to include
+            tags: List of tags (AND operation)
+            start_year: Earliest publication year
+            end_year: Latest publication year
+            search_query: Search query for title/author
+            
+        Returns:
+            List of filtered items
+        """
+        script = f"""
+        // Advanced item filtering
+        let filteredItems = [];
+        let searchResults = [];
+        
+        // Start with all items or collection items
+        let allItems = [];
+        if ({collection_id}) {{
+            let collection = Zotero.Collections.get({collection_id});
+            if (collection) {{
+                allItems = collection.getChildItems();
+            }}
+        }} else {{
+            allItems = Zotero.Items.getAll();
+        }}
+        
+        // Filter items
+        for (let item of allItems) {{
+            if (!item.isRegularItem()) continue;
+            
+            let itemData = {{
+                id: item.id,
+                key: item.key,
+                title: item.getField('title') || 'Untitled',
+                itemType: item.itemType,
+                date: item.getField('date') || '',
+                creators: item.getCreators().map(c => (c.firstName || '') + ' ' + (c.lastName || '')).join(', '),
+                tags: item.getTags().map(t => t.tag),
+                year: null
+            }};
+            
+            // Extract year from date
+            if (itemData.date) {{
+                let yearMatch = itemData.date.match(/\\b(19|20)\\d{{2}}\\b/);
+                if (yearMatch) {{
+                    itemData.year = parseInt(yearMatch[0]);
+                }}
+            }}
+            
+            // Apply filters
+            let passesFilter = true;
+            
+            // Item type filter
+            {f"if ({json.dumps(item_types)}) {{" if item_types else "// No item type filter"}
+                {"let allowedTypes = " + json.dumps(item_types) + ";" if item_types else ""}
+                {"if (!allowedTypes.includes(itemData.itemType)) passesFilter = false;" if item_types else ""}
+            {f"}}" if item_types else ""}
+            
+            // Tag filter (AND operation)
+            {f"if ({json.dumps(tags)}) {{" if tags else "// No tag filter"}
+                {"let requiredTags = " + json.dumps(tags) + ";" if tags else ""}
+                {"for (let requiredTag of requiredTags) {{" if tags else ""}
+                    {"if (!itemData.tags.includes(requiredTag)) {{ passesFilter = false; break; }}" if tags else ""}
+                {"}" if tags else ""}
+            {f"}}" if tags else ""}
+            
+            // Year range filter
+            if (itemData.year) {{
+                {f"if ({start_year} && itemData.year < {start_year}) passesFilter = false;" if start_year else ""}
+                {f"if ({end_year} && itemData.year > {end_year}) passesFilter = false;" if end_year else ""}
+            }}
+            
+            // Search query filter
+            {f"if ('{search_query}') {{" if search_query else "// No search query"}
+                {"let query = '" + (search_query or '').lower() + "';" if search_query else ""}
+                {"let searchText = (itemData.title + ' ' + itemData.creators).toLowerCase();" if search_query else ""}
+                {"if (!searchText.includes(query)) passesFilter = false;" if search_query else ""}
+            {f"}}" if search_query else ""}
+            
+            if (passesFilter) {{
+                filteredItems.push(itemData);
+            }}
+        }}
+        
+        return filteredItems;
+        """
+        
+        result = self.execute_javascript(script)
+        
+        if result and 'return' in result:
+            return result['return'] or []
+        
+        return []
+    
+    def get_items_by_tag_boolean(self, tag_query: str) -> List[Dict]:
+        """
+        Search items using Boolean tag operations
+        
+        Args:
+            tag_query: Boolean tag query (e.g., 'python OR programming', 'research AND NOT draft')
+            
+        Returns:
+            List of matching items
+        """
+        # Parse the boolean query
+        # Convert to JavaScript-compatible format
+        js_query = tag_query.replace(' AND ', ' && ').replace(' OR ', ' || ').replace(' NOT ', ' !')
+        
+        script = f"""
+        // Boolean tag search
+        let matchingItems = [];
+        let allItems = Zotero.Items.getAll();
+        
+        for (let item of allItems) {{
+            if (!item.isRegularItem()) continue;
+            
+            let itemTags = item.getTags().map(t => t.tag);
+            let itemData = {{
+                id: item.id,
+                key: item.key,
+                title: item.getField('title') || 'Untitled',
+                itemType: item.itemType,
+                date: item.getField('date') || '',
+                creators: item.getCreators().map(c => (c.firstName || '') + ' ' + (c.lastName || '')).join(', '),
+                tags: itemTags
+            }};
+            
+            // Simple boolean evaluation (this is a simplified version)
+            // In practice, you'd want a more robust parser
+            let queryParts = '{js_query}'.split(/\\s+(&&|\\|\\||!)\\s+/);
+            let operators = '{js_query}'.match(/\\s+(&&|\\|\\||!)\\s+/g) || [];
+            
+            // For now, implement simple AND/OR logic
+            let matches = false;
+            if ('{tag_query}'.includes(' OR ')) {{
+                let orTags = '{tag_query}'.split(' OR ').map(t => t.trim());
+                matches = orTags.some(tag => itemTags.includes(tag));
+            }} else if ('{tag_query}'.includes(' AND ')) {{
+                let andTags = '{tag_query}'.split(' AND ').map(t => t.trim());
+                matches = andTags.every(tag => itemTags.includes(tag));
+            }} else {{
+                // Single tag
+                matches = itemTags.includes('{tag_query}');
+            }}
+            
+            if (matches) {{
+                matchingItems.push(itemData);
+            }}
+        }}
+        
+        return matchingItems;
+        """
+        
+        result = self.execute_javascript(script)
+        
+        if result and 'return' in result:
+            return result['return'] or []
+        
+        return []
+    
+    def get_tag_cooccurrence(self, tag_list: List[str] = None, min_cooccurrence: int = 2) -> Dict[str, Dict[str, int]]:
+        """
+        Analyze tag co-occurrence patterns
+        
+        Args:
+            tag_list: List of tags to analyze (None for all tags)
+            min_cooccurrence: Minimum co-occurrence count to include
+            
+        Returns:
+            Dictionary of tag -> {co-occurring_tag: count}
+        """
+        script = f"""
+        // Tag co-occurrence analysis
+        let cooccurrence = {{}};
+        let allItems = Zotero.Items.getAll();
+        
+        for (let item of allItems) {{
+            if (!item.isRegularItem()) continue;
+            
+            let itemTags = item.getTags().map(t => t.tag);
+            
+            // For each pair of tags in this item
+            for (let i = 0; i < itemTags.length; i++) {{
+                for (let j = i + 1; j < itemTags.length; j++) {{
+                    let tag1 = itemTags[i];
+                    let tag2 = itemTags[j];
+                    
+                    // Initialize if needed
+                    if (!cooccurrence[tag1]) cooccurrence[tag1] = {{}};
+                    if (!cooccurrence[tag2]) cooccurrence[tag2] = {{}};
+                    
+                    // Count co-occurrences
+                    cooccurrence[tag1][tag2] = (cooccurrence[tag1][tag2] || 0) + 1;
+                    cooccurrence[tag2][tag1] = (cooccurrence[tag2][tag1] || 0) + 1;
+                }}
+            }}
+        }}
+        
+        // Filter by minimum co-occurrence
+        let filtered = {{}};
+        for (let tag in cooccurrence) {{
+            filtered[tag] = {{}};
+            for (let coTag in cooccurrence[tag]) {{
+                if (cooccurrence[tag][coTag] >= {min_cooccurrence}) {{
+                    filtered[tag][coTag] = cooccurrence[tag][coTag];
+                }}
+            }}
+            if (Object.keys(filtered[tag]).length === 0) {{
+                delete filtered[tag];
+            }}
+        }}
+        
+        return filtered;
+        """
+        
+        result = self.execute_javascript(script)
+        
+        if result and 'return' in result:
+            return result['return'] or {}
+        
+        return {}
+    
+    def get_library_metadata_summary(self) -> Dict[str, any]:
+        """
+        Get comprehensive metadata summary from local library
+        
+        Returns:
+            Dictionary with metadata statistics
+        """
+        script = """
+        // Library metadata summary
+        let summary = {
+            itemTypes: {},
+            years: {},
+            creators: {},
+            languages: {},
+            publishers: {},
+            totalItems: 0,
+            collectionsCount: 0
+        };
+        
+        let allItems = Zotero.Items.getAll();
+        let allCollections = Zotero.Collections.getAll();
+        
+        summary.collectionsCount = allCollections.length;
+        
+        for (let item of allItems) {
+            if (!item.isRegularItem()) continue;
+            
+            summary.totalItems++;
+            
+            // Item type
+            let itemType = item.itemType;
+            summary.itemTypes[itemType] = (summary.itemTypes[itemType] || 0) + 1;
+            
+            // Year
+            let date = item.getField('date');
+            if (date) {
+                let yearMatch = date.match(/\\b(19|20)\\d{2}\\b/);
+                if (yearMatch) {
+                    let year = yearMatch[0];
+                    summary.years[year] = (summary.years[year] || 0) + 1;
+                }
+            }
+            
+            // Creators
+            let creators = item.getCreators();
+            for (let creator of creators) {
+                if (creator.lastName) {
+                    summary.creators[creator.lastName] = (summary.creators[creator.lastName] || 0) + 1;
+                }
+            }
+            
+            // Language
+            let language = item.getField('language');
+            if (language) {
+                summary.languages[language] = (summary.languages[language] || 0) + 1;
+            }
+            
+            // Publisher
+            let publisher = item.getField('publisher');
+            if (publisher) {
+                summary.publishers[publisher] = (summary.publishers[publisher] || 0) + 1;
+            }
+        }
+        
+        return summary;
+        """
+        
+        result = self.execute_javascript(script)
+        
+        if result and 'return' in result:
+            return result['return'] or {}
+        
+        return {}
+    
+    def export_filtered_data(self, 
+                           collection_id: int = None,
+                           item_types: List[str] = None,
+                           tags: List[str] = None,
+                           format: str = 'json') -> str:
+        """
+        Export filtered data in specified format
+        
+        Args:
+            collection_id: Collection to export from
+            item_types: Item types to include
+            tags: Tags to filter by
+            format: Export format ('json', 'csv', 'bibtex')
+            
+        Returns:
+            Exported data as string
+        """
+        # Get filtered items
+        items = self.get_items_filtered(
+            collection_id=collection_id,
+            item_types=item_types,
+            tags=tags
+        )
+        
+        if format == 'json':
+            return json.dumps(items, indent=2)
+        elif format == 'csv':
+            if not items:
+                return ""
+            
+            # Create CSV format
+            import csv
+            import io
+            
+            output = io.StringIO()
+            writer = csv.DictWriter(output, fieldnames=items[0].keys())
+            writer.writeheader()
+            
+            for item in items:
+                # Convert list fields to strings
+                row = {}
+                for key, value in item.items():
+                    if isinstance(value, list):
+                        row[key] = '; '.join(str(v) for v in value)
+                    else:
+                        row[key] = str(value) if value is not None else ''
+                writer.writerow(row)
+            
+            return output.getvalue()
+        
+        # Add more export formats as needed
+        return json.dumps(items, indent=2)
 
 
 # Utility functions
