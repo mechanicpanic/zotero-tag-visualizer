@@ -7,6 +7,7 @@ from typing import List, Dict, Set, Optional, Union, Tuple
 from dataclasses import dataclass
 import re
 from enum import Enum
+import pandas as pd
 
 
 class FilterOperator(Enum):
@@ -139,29 +140,36 @@ class BooleanQueryParser:
         # Convert tags to lowercase for case-insensitive matching
         item_tags_lower = [tag.lower() for tag in item_tags]
         
-        # Check negated terms first
+        # Check negated terms first - if any negated term is found, reject
         for negated_term in query_expr.get('negated_terms', []):
-            if negated_term.lower() in item_tags_lower:
+            if any(negated_term.lower() in tag.lower() for tag in item_tags_lower):
                 return False
         
         terms = query_expr.get('terms', [])
         operators = query_expr.get('operators', [])
         
         if not terms:
-            return True  # No positive terms to match
+            return len(query_expr.get('negated_terms', [])) > 0  # Only match if we had negated terms to check
         
-        # Simplified evaluation logic
+        # Check each term against all tags
+        term_matches = []
+        for term in terms:
+            term_found = any(term.lower() in tag.lower() for tag in item_tags_lower)
+            term_matches.append(term_found)
+        
+        # Evaluate based on operators
         if not operators:
-            # Single term
-            return any(term.lower() in tag.lower() for tag in item_tags for term in terms)
+            # Single term or no operators - any term matches
+            return any(term_matches)
         
-        # Multiple terms with operators
+        # Multiple terms with operators - simplified evaluation
+        # For complex queries, we'll use a simple approach:
+        # If 'OR' appears anywhere, use OR logic for all terms
+        # Otherwise, use AND logic
         if 'OR' in operators:
-            # If any OR is present, use OR logic
-            return any(any(term.lower() in tag.lower() for tag in item_tags) for term in terms)
+            return any(term_matches)
         else:
-            # All AND logic
-            return all(any(term.lower() in tag.lower() for tag in item_tags) for term in terms)
+            return all(term_matches)
 
 
 class AdvancedFilter:
@@ -445,5 +453,4 @@ def suggest_filter_combinations(tags: Dict[str, int],
     return suggestions
 
 
-# Import pandas for timestamp functionality
-import pandas as pd
+# pandas imported at top of file

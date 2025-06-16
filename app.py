@@ -327,6 +327,8 @@ app.layout = dbc.Container([
     dcc.Store(id="processed-tags"),
     dcc.Store(id="connection-config"),
     dcc.Store(id="cache-info"),
+    dcc.Store(id="filter-presets-data"),  # Store for saved filter presets
+    dcc.Store(id="items-metadata"),  # Store for items metadata
     dcc.Interval(id="progress-interval", interval=1000, n_intervals=0, disabled=True)
 ])
 
@@ -485,9 +487,14 @@ def test_local_connection(n_clicks, connection_type):
     [Output("tags-data", "data"),
      Output("status-message", "children", allow_duplicate=True),
      Output("progress-bar", "style"),
-     Output("progress-interval", "disabled")],
+     Output("progress-interval", "disabled"),
+     Output("item-types-filter", "options"),
+     Output("languages-filter", "options")],
     Input("load-tags-btn", "n_clicks"),
     State("connection-type", "value"),
+    State("web-library-id", "value"),
+    State("web-library-type", "value"),
+    State("web-api-key", "value"),
     background=True,
     running=[
         (Output("load-tags-btn", "disabled"), True, False),
@@ -496,55 +503,141 @@ def test_local_connection(n_clicks, connection_type):
     progress=[Output("progress-bar", "value"), Output("progress-text", "children")],
     prevent_initial_call=True
 )
-def load_tags_background(set_progress, n_clicks, connection_type):
+def load_tags_background(set_progress, n_clicks, connection_type, library_id, library_type, api_key):
     if connection_type == "web":
-        return None, dbc.Alert("💡 Web API mode is not fully implemented yet. Please use Local Zotero mode for now.", color="info"), {"display": "none"}, True
-    
-    try:
-        # local connection - no progress bar needed for fast local access
-        local_client = ZoteroLocalClient()
-        tag_freq = local_client.get_all_tags_with_frequencies()
+        if not all([library_id, library_type, api_key]):
+            return None, dbc.Alert("⚠️ Please fill in all Web API credentials first.", color="warning"), {"display": "none"}, True, [], []
         
-        if tag_freq:
-            # Save to cache with local identifier
-            local_lib_id = "local_library"
-            db.save_library_info(local_lib_id, "local", "Local Zotero Library")
-            db.save_tags(local_lib_id, "local", tag_freq)
+        try:
+            # Web API connection with metadata
+            set_progress((10, "Connecting to Zotero Web API..."))
+            client = ZoteroClient(library_id, library_type, api_key)
             
+            # Test connection first
+            if not client.test_connection():
+                return None, dbc.Alert("❌ Could not connect to Zotero Web API. Please check your credentials.", color="danger"), {"display": "none"}, True, [], []
+            
+            set_progress((30, "Fetching items with metadata..."))
+            # Get full items data for metadata-based filtering
+            items_data = client.get_items_with_tags()
+            
+            if not items_data:
+                return None, dbc.Alert("⚠️ No items found in the library.", color="warning"), {"display": "none"}, True, [], []
+            
+            set_progress((60, "Processing tags and metadata..."))
+            
+            # Process tags using metadata-aware processor
+            processor = TagProcessor()
+            tag_freq = processor.process_items_tags(items_data)
+            
+            # Extract metadata for filter options
+            metadata_summary = processor.get_metadata_summary()
+            
+            # Create filter options
+            item_types_options = [{"label": item_type, "value": item_type} 
+                                 for item_type in metadata_summary.get('item_types', {}).keys()]
+            languages_options = [{"label": lang, "value": lang} 
+                               for lang in metadata_summary.get('languages', {}).keys()]
+            
+            set_progress((80, "Saving to cache..."))
+            
+            # Save to cache
+            web_lib_id = f"{library_type}_{library_id}"
+            db.save_library_info(web_lib_id, library_type, f"Zotero {library_type.title()} Library")
+            db.save_tags(web_lib_id, library_type, tag_freq)
+            
+            # Store metadata in processor for advanced filtering
             tags_data = [{"tag": tag, "meta": {"numItems": count}} for tag, count in tag_freq.items()]
             
-            # Create centered, bigger "Completed!" message
+            set_progress((100, "Complete!"))
+            
             completed_message = html.Div([
-                html.H3("🎉 Completed!", className="text-center text-success", style={"fontSize": "2rem", "margin": "20px 0"})
+                html.H3("🎉 Completed!", className="text-center text-success", style={"fontSize": "2rem", "margin": "20px 0"}),
+                html.P(f"Loaded {len(tag_freq)} tags from {len(items_data)} items", className="text-center text-muted")
             ], className="text-center")
             
-            return tags_data, completed_message, {"display": "none"}, True
-        else:
-            return None, dbc.Alert([
-                "❌ Could not fetch tags from local Zotero. ",
-                html.Br(),
-                "Make sure you've enabled 'Allow other applications on this computer to communicate with Zotero' in Zotero Settings → Advanced.",
-                html.Br(),
-                "Try the 'Test Local Connection' button first."
-            ], color="warning"), {"display": "none"}, True
+            return tags_data, completed_message, {"display": "none"}, True, item_types_options, languages_options
             
-    except Exception as e:
-        print(f"ERROR: {str(e)}")
-        return None, dbc.Alert(f"Error loading tags: {str(e)}", color="danger"), {"display": "none"}, True
+        except Exception as e:
+            print(f"ERROR: {str(e)}")
+            return None, dbc.Alert(f"Error loading tags: {str(e)}", color="danger"), {"display": "none"}, True, [], []
+    
+    else:  # Local connection
+        try:
+            # local connection - no progress bar needed for fast local access
+            local_client = ZoteroLocalClient()
+            tag_freq = local_client.get_all_tags_with_frequencies()
+            
+            if tag_freq:
+                # Save to cache with local identifier
+                local_lib_id = "local_library"
+                db.save_library_info(local_lib_id, "local", "Local Zotero Library")
+                db.save_tags(local_lib_id, "local", tag_freq)
+                
+                tags_data = [{"tag": tag, "meta": {"numItems": count}} for tag, count in tag_freq.items()]
+                
+                # Get metadata summary for filter options
+                try:
+                    metadata_summary = local_client.get_library_metadata_summary()
+                    item_types_options = [{"label": item_type, "value": item_type} 
+                                         for item_type in metadata_summary.get('itemTypes', {}).keys()]
+                    languages_options = [{"label": lang, "value": lang} 
+                                       for lang in metadata_summary.get('languages', {}).keys()]
+                except:
+                    # Fallback if metadata fetch fails
+                    item_types_options = []
+                    languages_options = []
+                
+                # Create centered, bigger "Completed!" message
+                completed_message = html.Div([
+                    html.H3("🎉 Completed!", className="text-center text-success", style={"fontSize": "2rem", "margin": "20px 0"})
+                ], className="text-center")
+                
+                return tags_data, completed_message, {"display": "none"}, True, item_types_options, languages_options
+            else:
+                return None, dbc.Alert([
+                    "❌ Could not fetch tags from local Zotero. ",
+                    html.Br(),
+                    "Make sure you've enabled 'Allow other applications on this computer to communicate with Zotero' in Zotero Settings → Advanced.",
+                    html.Br(),
+                    "Try the 'Test Local Connection' button first."
+                ], color="warning"), {"display": "none"}, True, [], []
+                
+        except Exception as e:
+            print(f"ERROR: {str(e)}")
+            return None, dbc.Alert(f"Error loading tags: {str(e)}", color="danger"), {"display": "none"}, True, [], []
 
+# Toggle advanced filters collapse
 @callback(
-    [Output("processed-tags", "data"),
-     Output("tag-cloud-container", "children"),
-     Output("tag-statistics", "children")],
+    Output("advanced-filters-collapse", "is_open"),
+    Input("toggle-advanced-filters", "n_clicks"),
+    State("advanced-filters-collapse", "is_open"),
+    prevent_initial_call=True
+)
+def toggle_advanced_filters(n_clicks, is_open):
+    return not is_open
+
+# Enhanced filters callback with advanced options
+@callback(
+    [Output("processed-tags", "data", allow_duplicate=True),
+     Output("tag-cloud-container", "children", allow_duplicate=True),
+     Output("tag-statistics", "children", allow_duplicate=True)],
     Input("apply-filters-btn", "n_clicks"),
     State("tags-data", "data"),
     State("search-input", "value"),
     State("min-freq", "value"),
     State("max-freq", "value"),
     State("max-tags", "value"),
+    State("boolean-query", "value"),
+    State("item-types-filter", "value"),
+    State("start-year", "value"),
+    State("end-year", "value"),
+    State("creator-filter", "value"),
+    State("languages-filter", "value"),
     prevent_initial_call=True
 )
-def update_visualization(n_clicks, tags_data, search_term, min_freq, max_freq, max_tags):
+def update_visualization_advanced(n_clicks, tags_data, search_term, min_freq, max_freq, max_tags,
+                                  boolean_query, item_types, start_year, end_year, creator_filter, languages):
     if not tags_data:
         return None, html.Div("No tags data available. Please load tags first."), html.Div()
     
@@ -552,12 +645,23 @@ def update_visualization(n_clicks, tags_data, search_term, min_freq, max_freq, m
         processor = TagProcessor()
         tag_freq = processor.process_zotero_tags(tags_data)
         
-        # Apply filters
-        if search_term:
+        # Apply basic filters first
+        if search_term and not boolean_query:
             tag_freq = processor.search_tags(search_term)
         
+        # Apply Boolean query if provided
+        if boolean_query:
+            tag_freq = processor.get_tags_by_boolean_query(boolean_query)
+        
+        # Apply frequency filters
         min_freq = min_freq or 1
         filtered_tags = processor.filter_by_frequency(min_freq, max_freq)
+        
+        # Apply advanced text filters if provided
+        if creator_filter:
+            # For now, just filter tags containing creator name
+            filtered_tags = {tag: freq for tag, freq in filtered_tags.items() 
+                           if creator_filter.lower() in tag.lower()}
         
         if max_tags:
             processor.processed_tags = filtered_tags
@@ -662,6 +766,201 @@ def update_visualization(n_clicks, tags_data, search_term, min_freq, max_freq, m
         
     except Exception as e:
         return None, html.Div(f"Error generating visualization: {str(e)}"), html.Div()
+
+# Clear all filters callback
+@callback(
+    [Output("search-input", "value"),
+     Output("min-freq", "value"),
+     Output("max-freq", "value"),
+     Output("boolean-query", "value"),
+     Output("creator-filter", "value"),
+     Output("item-types-filter", "value"),
+     Output("languages-filter", "value"),
+     Output("start-year", "value"),
+     Output("end-year", "value")],
+    Input("clear-filters-btn", "n_clicks"),
+    prevent_initial_call=True
+)
+def clear_all_filters(n_clicks):
+    return "", 1, None, "", "", [], [], None, None
+
+# Collection browser callback
+@callback(
+    [Output("collection-browser", "options"),
+     Output("load-collection-tags-btn", "disabled")],
+    Input("tags-data", "data"),
+    State("connection-type", "value"),
+    State("web-library-id", "value"),
+    State("web-library-type", "value"),
+    State("web-api-key", "value")
+)
+def update_collections(tags_data, connection_type, library_id, library_type, api_key):
+    if not tags_data:
+        return [], True
+    
+    try:
+        if connection_type == "web" and all([library_id, library_type, api_key]):
+            client = ZoteroClient(library_id, library_type, api_key)
+            collections = client.get_top_level_collections()
+            
+            options = [{"label": f"{col['data']['name']} ({col['meta']['numItems']} items)", 
+                       "value": col['key']} for col in collections]
+            return options, False
+            
+        elif connection_type == "local":
+            local_client = ZoteroLocalClient()
+            collections = local_client.get_collections()
+            
+            options = [{"label": f"{col['name']} ({col.get('itemCount', 0)} items)", 
+                       "value": col['key']} for col in collections if not col.get('parentID')]
+            return options, False
+        
+        return [], True
+        
+    except Exception as e:
+        print(f"Error loading collections: {e}")
+        return [], True
+
+# Export functionality callback
+@callback(
+    Output("status-message", "children", allow_duplicate=True),
+    Input("export-results-btn", "n_clicks"),
+    State("processed-tags", "data"),
+    prevent_initial_call=True
+)
+def export_results(n_clicks, processed_tags):
+    if not processed_tags:
+        return dbc.Alert("⚠️ No filtered results to export. Apply filters first.", color="warning")
+    
+    try:
+        processor = TagProcessor()
+        processor.processed_tags = processed_tags
+        
+        # Export to JSON
+        export_data = processor.export_filtered_tags(processed_tags, format='json', include_metadata=True)
+        
+        # For demo, show success message (in production, this would trigger a download)
+        return dbc.Alert([
+            "✅ Export ready! ",
+            html.Br(),
+            f"Generated export with {len(processed_tags)} tags.",
+            html.Br(),
+            html.Small("(In a real application, this would download the file)")
+        ], color="success")
+        
+    except Exception as e:
+        return dbc.Alert(f"❌ Export failed: {str(e)}", color="danger")
+
+# Filter presets management
+@callback(
+    [Output("filter-presets-data", "data"),
+     Output("filter-presets", "options")],
+    [Input("save-filter-btn", "n_clicks"),
+     Input("app", "id")],  # Trigger on app init
+    State("search-input", "value"),
+    State("min-freq", "value"),
+    State("max-freq", "value"),
+    State("boolean-query", "value"),
+    State("creator-filter", "value"),
+    State("item-types-filter", "value"),
+    State("languages-filter", "value"),
+    State("start-year", "value"),
+    State("end-year", "value"),
+    State("filter-presets-data", "data")
+)
+def manage_filter_presets(save_clicks, app_id, search_term, min_freq, max_freq, boolean_query, 
+                         creator_filter, item_types, languages, start_year, end_year, existing_presets):
+    ctx = callback_context
+    
+    # Initialize presets if empty
+    if existing_presets is None:
+        existing_presets = []
+    
+    # If save button was clicked, create new preset
+    if ctx.triggered and ctx.triggered[0]["prop_id"] == "save-filter-btn.n_clicks" and save_clicks:
+        # Create filter criteria
+        from advanced_filters import FilterCriteria, AdvancedFilter
+        
+        criteria = FilterCriteria(
+            search_terms=[search_term] if search_term else None,
+            item_types=item_types,
+            start_year=start_year,
+            end_year=end_year,
+            creators=[creator_filter] if creator_filter else None,
+            languages=languages,
+            min_frequency=min_freq,
+            max_frequency=max_freq
+        )
+        
+        # Generate preset name
+        preset_name = f"Filter {len(existing_presets) + 1}"
+        if search_term:
+            preset_name = f"Search: {search_term[:20]}"
+        elif boolean_query:
+            preset_name = f"Query: {boolean_query[:20]}"
+        elif item_types:
+            preset_name = f"Types: {', '.join(item_types[:2])}"
+        
+        # Create preset
+        filter_engine = AdvancedFilter()
+        preset = filter_engine.create_filter_preset(preset_name, criteria)
+        preset['boolean_query'] = boolean_query  # Add boolean query to preset
+        
+        # Add to existing presets
+        existing_presets.append(preset)
+        
+        # Save to database preferences
+        db.save_preference("filter_presets", existing_presets)
+    
+    # Load presets from database if not in memory
+    if not existing_presets:
+        existing_presets = db.get_preference("filter_presets", [])
+    
+    # Create options for dropdown
+    options = [{"label": preset["name"], "value": i} for i, preset in enumerate(existing_presets)]
+    
+    return existing_presets, options
+
+# Load filter preset callback
+@callback(
+    [Output("search-input", "value", allow_duplicate=True),
+     Output("min-freq", "value", allow_duplicate=True),
+     Output("max-freq", "value", allow_duplicate=True),
+     Output("boolean-query", "value", allow_duplicate=True),
+     Output("creator-filter", "value", allow_duplicate=True),
+     Output("item-types-filter", "value", allow_duplicate=True),
+     Output("languages-filter", "value", allow_duplicate=True),
+     Output("start-year", "value", allow_duplicate=True),
+     Output("end-year", "value", allow_duplicate=True)],
+    Input("filter-presets", "value"),
+    State("filter-presets-data", "data"),
+    prevent_initial_call=True
+)
+def load_filter_preset(preset_index, presets_data):
+    if preset_index is None or not presets_data or preset_index >= len(presets_data):
+        return no_update, no_update, no_update, no_update, no_update, no_update, no_update, no_update, no_update
+    
+    preset = presets_data[preset_index]
+    criteria = preset.get("criteria", {})
+    
+    # Extract values from preset
+    search_terms = criteria.get("search_terms", [])
+    search_value = search_terms[0] if search_terms else ""
+    
+    creators = criteria.get("creators", [])
+    creator_value = creators[0] if creators else ""
+    
+    return (
+        search_value,
+        criteria.get("min_frequency", 1),
+        criteria.get("max_frequency"),
+        preset.get("boolean_query", ""),
+        creator_value,
+        criteria.get("item_types", []),
+        criteria.get("languages", []),
+        criteria.get("start_year"),
+        criteria.get("end_year")
+    )
 
 # Auto-apply filters when tags are loaded
 @callback(

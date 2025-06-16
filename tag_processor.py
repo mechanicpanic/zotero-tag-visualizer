@@ -434,38 +434,33 @@ class TagProcessor:
         Returns:
             Dictionary of matching tags and frequencies
         """
-        # Simple Boolean query parser
-        # This is a basic implementation - could be enhanced with a proper parser
+        from advanced_filters import BooleanQueryParser
         
         matching_tags = {}
+        parser = BooleanQueryParser()
         
-        # Convert to lowercase for case-insensitive matching
-        query_lower = query.lower()
-        
-        for tag, count in self.processed_tags.items():
-            tag_lower = tag.lower()
+        try:
+            # Parse the Boolean query
+            query_expr = parser.parse_query(query)
             
-            # Very basic Boolean evaluation
-            # Replace tag names with True/False in the query
-            eval_query = query_lower
+            # Evaluate each tag against the parsed query
+            for tag, count in self.processed_tags.items():
+                # For tag-level matching, treat each tag as a single-item list
+                if parser.evaluate_query(query_expr, [tag]):
+                    matching_tags[tag] = count
             
-            # Simple word replacement (this is very basic)
-            words = re.findall(r'\b\w+\b', query_lower)
-            for word in words:
-                if word not in ['and', 'or', 'not']:
-                    if word in tag_lower:
-                        eval_query = eval_query.replace(word, 'True')
-                    else:
-                        eval_query = eval_query.replace(word, 'False')
+            print(f"DEBUG: Boolean query '{query}' matched {len(matching_tags)} tags")
+            return matching_tags
             
-            # Convert Boolean operators
-            eval_query = eval_query.replace(' and ', ' and ')
-            eval_query = eval_query.replace(' or ', ' or ')
-            eval_query = eval_query.replace(' not ', ' not ')
+        except Exception as e:
+            print(f"DEBUG: Boolean query parsing failed, falling back to simple search: {e}")
             
-            try:
-                # This is unsafe for production - should use a proper parser
-                # For now, just do simple pattern matching
+            # Fallback to simple search
+            query_lower = query.lower()
+            for tag, count in self.processed_tags.items():
+                tag_lower = tag.lower()
+                
+                # Simple pattern matching
                 if 'and' in query_lower:
                     # All terms must be present
                     terms = [term.strip() for term in query_lower.split('and')]
@@ -480,12 +475,8 @@ class TagProcessor:
                     # Simple contains search
                     if query_lower in tag_lower:
                         matching_tags[tag] = count
-            except:
-                # Fall back to simple search
-                if query_lower in tag_lower:
-                    matching_tags[tag] = count
-        
-        return matching_tags
+            
+            return matching_tags
     
     def get_metadata_summary(self) -> Dict[str, any]:
         """
