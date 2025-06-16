@@ -1,5 +1,5 @@
 import dash
-from dash import dcc, html, Input, Output, State, callback_context, DiskcacheManager, callback, no_update
+from dash import dcc, html, Input, Output, State, callback_context, DiskcacheManager, callback, no_update, ALL
 import plotly.graph_objects as go
 import plotly.express as px
 from wordcloud import WordCloud
@@ -299,6 +299,64 @@ app.layout = dbc.Container([
                         ], width=4)
                     ]),
                     html.Div(id="collection-info", className="mt-2")
+                ])
+            ], className="mb-4")
+        ])
+    ]),
+    
+    # Tag Analysis Panel
+    dbc.Row([
+        dbc.Col([
+            dbc.Card([
+                dbc.CardHeader([
+                    html.H5("Tag Analysis & Suggestions", className="mb-0"),
+                    dbc.Button(
+                        "Show/Hide Analysis",
+                        id="toggle-tag-analysis",
+                        color="link",
+                        size="sm",
+                        className="float-end"
+                    )
+                ]),
+                dbc.CardBody([
+                    dbc.Collapse([
+                        dbc.Row([
+                            dbc.Col([
+                                dbc.Label("Analyze Tag Relationships:"),
+                                dbc.Input(
+                                    id="tag-analysis-input",
+                                    type="text",
+                                    placeholder="Enter a tag to analyze (e.g., 'machine learning')",
+                                    value=""
+                                ),
+                                html.Br(),
+                                dbc.Button(
+                                    "Analyze Co-occurrences",
+                                    id="analyze-cooccurrence-btn",
+                                    color="primary",
+                                    size="sm"
+                                )
+                            ], width=6),
+                            dbc.Col([
+                                dbc.Label("Filter Suggestions:"),
+                                html.Div(id="filter-suggestions", className="mt-2")
+                            ], width=6)
+                        ], className="mb-3"),
+                        
+                        html.Hr(),
+                        
+                        # Co-occurrence results
+                        dbc.Row([
+                            dbc.Col([
+                                html.H6("Related Tags:", className="mb-2"),
+                                html.Div(id="cooccurrence-results")
+                            ], width=6),
+                            dbc.Col([
+                                html.H6("Tag Hierarchy:", className="mb-2"),
+                                html.Div(id="tag-hierarchy-results")
+                            ], width=6)
+                        ])
+                    ], id="tag-analysis-collapse", is_open=False)
                 ])
             ], className="mb-4")
         ])
@@ -961,6 +1019,229 @@ def load_filter_preset(preset_index, presets_data):
         criteria.get("start_year"),
         criteria.get("end_year")
     )
+
+# Toggle tag analysis panel
+@callback(
+    Output("tag-analysis-collapse", "is_open"),
+    Input("toggle-tag-analysis", "n_clicks"),
+    State("tag-analysis-collapse", "is_open"),
+    prevent_initial_call=True
+)
+def toggle_tag_analysis(n_clicks, is_open):
+    return not is_open
+
+# Tag co-occurrence analysis
+@callback(
+    [Output("cooccurrence-results", "children"),
+     Output("tag-hierarchy-results", "children"),
+     Output("filter-suggestions", "children")],
+    Input("analyze-cooccurrence-btn", "n_clicks"),
+    State("tag-analysis-input", "value"),
+    State("items-metadata", "data"),
+    State("processed-tags", "data"),
+    prevent_initial_call=True
+)
+def analyze_tag_relationships(n_clicks, target_tag, items_metadata, processed_tags):
+    if not target_tag or not processed_tags:
+        return (
+            dbc.Alert("Enter a tag to analyze", color="info"),
+            dbc.Alert("No hierarchy detected", color="info"),
+            dbc.Alert("Load tags first", color="info")
+        )
+    
+    try:
+        # Find matching tags (partial match)
+        matching_tags = [tag for tag in processed_tags.keys() if target_tag.lower() in tag.lower()]
+        
+        if not matching_tags:
+            return (
+                dbc.Alert(f"No tags found containing '{target_tag}'", color="warning"),
+                dbc.Alert("No hierarchy detected", color="info"),
+                dbc.Alert("No suggestions available", color="info")
+            )
+        
+        # Use the first/best matching tag
+        best_match = min(matching_tags, key=len)  # Shortest match is likely most relevant
+        
+        # Mock co-occurrence analysis (in real implementation, would use actual item data)
+        processor = TagProcessor()
+        processor.processed_tags = processed_tags
+        
+        # Generate mock co-occurrence data based on tag similarity
+        cooccurring_tags = []
+        for tag, freq in processed_tags.items():
+            if tag != best_match:
+                # Simple heuristic: tags with common words are likely to co-occur
+                target_words = set(best_match.lower().split())
+                tag_words = set(tag.lower().split())
+                overlap = len(target_words.intersection(tag_words))
+                
+                if overlap > 0 or any(word in tag.lower() for word in target_words):
+                    cooccurring_tags.append((tag, freq, overlap))
+        
+        # Sort by frequency and word overlap
+        cooccurring_tags.sort(key=lambda x: (x[2], x[1]), reverse=True)
+        
+        # Create co-occurrence results
+        if cooccurring_tags:
+            cooccur_badges = []
+            for tag, freq, overlap in cooccurring_tags[:10]:  # Top 10
+                badge_color = "primary" if overlap > 1 else "secondary"
+                cooccur_badges.append(
+                    dbc.Badge([
+                        tag,
+                        dbc.Badge(freq, color="light", text_color="dark", className="ms-1")
+                    ], color=badge_color, className="me-2 mb-2", style={"cursor": "pointer"})
+                )
+            cooccur_results = html.Div(cooccur_badges)
+        else:
+            cooccur_results = dbc.Alert("No related tags found", color="info")
+        
+        # Analyze hierarchical patterns
+        hierarchy_results = processor.parse_hierarchical_tags()
+        hierarchy_display = []
+        
+        for parent, children in hierarchy_results.items():
+            if target_tag.lower() in parent.lower() or any(target_tag.lower() in child.lower() for child in children):
+                hierarchy_display.append(
+                    html.Div([
+                        html.Strong(parent),
+                        html.Ul([html.Li(child) for child in children[:5]])  # Max 5 children
+                    ], className="mb-2")
+                )
+        
+        if hierarchy_display:
+            hierarchy_results = html.Div(hierarchy_display)
+        else:
+            hierarchy_results = dbc.Alert("No hierarchical patterns detected", color="info")
+        
+        # Generate filter suggestions
+        suggestions = []
+        
+        # Suggest Boolean queries
+        if cooccurring_tags:
+            top_related = cooccurring_tags[0][0]
+            suggestions.append(
+                dbc.Button(
+                    f'"{best_match}" AND "{top_related}"',
+                    id={"type": "suggestion-btn", "query": f'"{best_match}" AND "{top_related}"'},
+                    color="outline-primary",
+                    size="sm",
+                    className="me-2 mb-2"
+                )
+            )
+            suggestions.append(
+                dbc.Button(
+                    f'"{best_match}" OR "{top_related}"',
+                    id={"type": "suggestion-btn", "query": f'"{best_match}" OR "{top_related}"'},
+                    color="outline-secondary",
+                    size="sm",
+                    className="me-2 mb-2"
+                )
+            )
+        
+        # Suggest exclusions
+        if len(matching_tags) > 1:
+            other_match = matching_tags[1]
+            suggestions.append(
+                dbc.Button(
+                    f'"{best_match}" NOT "{other_match}"',
+                    id={"type": "suggestion-btn", "query": f'"{best_match}" NOT "{other_match}"'},
+                    color="outline-warning",
+                    size="sm",
+                    className="me-2 mb-2"
+                )
+            )
+        
+        suggestions_display = html.Div([
+            html.P("Click to apply:", className="small text-muted"),
+            html.Div(suggestions)
+        ]) if suggestions else dbc.Alert("No suggestions available", color="info")
+        
+        return cooccur_results, hierarchy_results, suggestions_display
+        
+    except Exception as e:
+        print(f"Error in tag analysis: {e}")
+        return (
+            dbc.Alert(f"Analysis error: {str(e)}", color="danger"),
+            dbc.Alert("Analysis failed", color="danger"),
+            dbc.Alert("Suggestions unavailable", color="danger")
+        )
+
+# Apply suggested query
+@callback(
+    Output("boolean-query", "value", allow_duplicate=True),
+    Input({"type": "suggestion-btn", "query": ALL}, "n_clicks"),
+    prevent_initial_call=True
+)
+def apply_suggested_query(n_clicks_list):
+    ctx = callback_context
+    if not ctx.triggered:
+        return no_update
+    
+    # Get the query from the button ID
+    button_id = ctx.triggered[0]["prop_id"]
+    if button_id:
+        # Extract query from the button ID
+        import json
+        try:
+            # Parse the component ID to get the query
+            button_data = json.loads(button_id.split('.')[0])
+            return button_data.get("query", "")
+        except:
+            return no_update
+    
+    return no_update
+
+# Collection-based tag loading
+@callback(
+    [Output("tags-data", "data", allow_duplicate=True),
+     Output("collection-info", "children")],
+    Input("load-collection-tags-btn", "n_clicks"),
+    State("collection-browser", "value"),
+    State("connection-type", "value"),
+    State("web-library-id", "value"),
+    State("web-library-type", "value"),
+    State("web-api-key", "value"),
+    prevent_initial_call=True
+)
+def load_collection_tags(n_clicks, collection_key, connection_type, library_id, library_type, api_key):
+    if not collection_key:
+        return no_update, dbc.Alert("Select a collection first", color="warning")
+    
+    try:
+        if connection_type == "web" and all([library_id, library_type, api_key]):
+            client = ZoteroClient(library_id, library_type, api_key)
+            tag_freq = client.get_tags_for_collection(collection_key)
+            
+            if tag_freq:
+                tags_data = [{"tag": tag, "meta": {"numItems": count}} for tag, count in tag_freq.items()]
+                info_msg = dbc.Alert(f"✅ Loaded {len(tag_freq)} tags from collection", color="success")
+                return tags_data, info_msg
+            else:
+                return no_update, dbc.Alert("No tags found in this collection", color="warning")
+                
+        elif connection_type == "local":
+            local_client = ZoteroLocalClient()
+            # Note: collection_key should be converted to collection_id for local client
+            try:
+                collection_id = int(collection_key)  # Assuming key is numeric for local
+                tag_freq = local_client.get_tags_for_collection(collection_id)
+                
+                if tag_freq:
+                    tags_data = [{"tag": tag, "meta": {"numItems": count}} for tag, count in tag_freq.items()]
+                    info_msg = dbc.Alert(f"✅ Loaded {len(tag_freq)} tags from collection", color="success")
+                    return tags_data, info_msg
+                else:
+                    return no_update, dbc.Alert("No tags found in this collection", color="warning")
+            except ValueError:
+                return no_update, dbc.Alert("Invalid collection ID for local Zotero", color="danger")
+        
+        return no_update, dbc.Alert("Collection loading not supported for current connection", color="warning")
+        
+    except Exception as e:
+        print(f"Error loading collection tags: {e}")
+        return no_update, dbc.Alert(f"Error loading collection: {str(e)}", color="danger")
 
 # Auto-apply filters when tags are loaded
 @callback(
