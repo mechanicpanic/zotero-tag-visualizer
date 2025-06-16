@@ -550,9 +550,6 @@ def test_local_connection(n_clicks, connection_type):
      Output("languages-filter", "options")],
     Input("load-tags-btn", "n_clicks"),
     State("connection-type", "value"),
-    State("web-library-id", "value"),
-    State("web-library-type", "value"),
-    State("web-api-key", "value"),
     background=True,
     running=[
         (Output("load-tags-btn", "disabled"), True, False),
@@ -561,64 +558,9 @@ def test_local_connection(n_clicks, connection_type):
     progress=[Output("progress-bar", "value"), Output("progress-text", "children")],
     prevent_initial_call=True
 )
-def load_tags_background(set_progress, n_clicks, connection_type, library_id, library_type, api_key):
+def load_tags_background(set_progress, n_clicks, connection_type):
     if connection_type == "web":
-        if not all([library_id, library_type, api_key]):
-            return None, dbc.Alert("⚠️ Please fill in all Web API credentials first.", color="warning"), {"display": "none"}, True, [], []
-        
-        try:
-            # Web API connection with metadata
-            set_progress((10, "Connecting to Zotero Web API..."))
-            client = ZoteroClient(library_id, library_type, api_key)
-            
-            # Test connection first
-            if not client.test_connection():
-                return None, dbc.Alert("❌ Could not connect to Zotero Web API. Please check your credentials.", color="danger"), {"display": "none"}, True, [], []
-            
-            set_progress((30, "Fetching items with metadata..."))
-            # Get full items data for metadata-based filtering
-            items_data = client.get_items_with_tags()
-            
-            if not items_data:
-                return None, dbc.Alert("⚠️ No items found in the library.", color="warning"), {"display": "none"}, True, [], []
-            
-            set_progress((60, "Processing tags and metadata..."))
-            
-            # Process tags using metadata-aware processor
-            processor = TagProcessor()
-            tag_freq = processor.process_items_tags(items_data)
-            
-            # Extract metadata for filter options
-            metadata_summary = processor.get_metadata_summary()
-            
-            # Create filter options
-            item_types_options = [{"label": item_type, "value": item_type} 
-                                 for item_type in metadata_summary.get('item_types', {}).keys()]
-            languages_options = [{"label": lang, "value": lang} 
-                               for lang in metadata_summary.get('languages', {}).keys()]
-            
-            set_progress((80, "Saving to cache..."))
-            
-            # Save to cache
-            web_lib_id = f"{library_type}_{library_id}"
-            db.save_library_info(web_lib_id, library_type, f"Zotero {library_type.title()} Library")
-            db.save_tags(web_lib_id, library_type, tag_freq)
-            
-            # Store metadata in processor for advanced filtering
-            tags_data = [{"tag": tag, "meta": {"numItems": count}} for tag, count in tag_freq.items()]
-            
-            set_progress((100, "Complete!"))
-            
-            completed_message = html.Div([
-                html.H3("🎉 Completed!", className="text-center text-success", style={"fontSize": "2rem", "margin": "20px 0"}),
-                html.P(f"Loaded {len(tag_freq)} tags from {len(items_data)} items", className="text-center text-muted")
-            ], className="text-center")
-            
-            return tags_data, completed_message, {"display": "none"}, True, item_types_options, languages_options
-            
-        except Exception as e:
-            print(f"ERROR: {str(e)}")
-            return None, dbc.Alert(f"Error loading tags: {str(e)}", color="danger"), {"display": "none"}, True, [], []
+        return None, dbc.Alert("💡 Web API mode requires manual setup. Switch to Local mode or configure Web API credentials in the config panel.", color="info"), {"display": "none"}, True, [], []
     
     else:  # Local connection
         try:
@@ -847,30 +789,23 @@ def clear_all_filters(n_clicks):
     [Output("collection-browser", "options"),
      Output("load-collection-tags-btn", "disabled")],
     Input("tags-data", "data"),
-    State("connection-type", "value"),
-    State("web-library-id", "value"),
-    State("web-library-type", "value"),
-    State("web-api-key", "value")
+    State("connection-type", "value")
 )
-def update_collections(tags_data, connection_type, library_id, library_type, api_key):
+def update_collections(tags_data, connection_type):
     if not tags_data:
         return [], True
     
     try:
-        if connection_type == "web" and all([library_id, library_type, api_key]):
-            client = ZoteroClient(library_id, library_type, api_key)
-            collections = client.get_top_level_collections()
-            
-            options = [{"label": f"{col['data']['name']} ({col['meta']['numItems']} items)", 
-                       "value": col['key']} for col in collections]
-            return options, False
+        if connection_type == "web":
+            # Web API collections require manual setup - disable for now
+            return [], True
             
         elif connection_type == "local":
             local_client = ZoteroLocalClient()
             collections = local_client.get_collections()
             
             options = [{"label": f"{col['name']} ({col.get('itemCount', 0)} items)", 
-                       "value": col['key']} for col in collections if not col.get('parentID')]
+                       "value": col['id']} for col in collections if not col.get('parentID')]  # Use 'id' instead of 'key' for local
             return options, False
         
         return [], True
@@ -1200,32 +1135,21 @@ def apply_suggested_query(n_clicks_list):
     Input("load-collection-tags-btn", "n_clicks"),
     State("collection-browser", "value"),
     State("connection-type", "value"),
-    State("web-library-id", "value"),
-    State("web-library-type", "value"),
-    State("web-api-key", "value"),
     prevent_initial_call=True
 )
-def load_collection_tags(n_clicks, collection_key, connection_type, library_id, library_type, api_key):
+def load_collection_tags(n_clicks, collection_key, connection_type):
     if not collection_key:
         return no_update, dbc.Alert("Select a collection first", color="warning")
     
     try:
-        if connection_type == "web" and all([library_id, library_type, api_key]):
-            client = ZoteroClient(library_id, library_type, api_key)
-            tag_freq = client.get_tags_for_collection(collection_key)
-            
-            if tag_freq:
-                tags_data = [{"tag": tag, "meta": {"numItems": count}} for tag, count in tag_freq.items()]
-                info_msg = dbc.Alert(f"✅ Loaded {len(tag_freq)} tags from collection", color="success")
-                return tags_data, info_msg
-            else:
-                return no_update, dbc.Alert("No tags found in this collection", color="warning")
+        if connection_type == "web":
+            return no_update, dbc.Alert("Web API collection loading requires manual setup", color="warning")
                 
         elif connection_type == "local":
             local_client = ZoteroLocalClient()
-            # Note: collection_key should be converted to collection_id for local client
+            # collection_key is the collection ID for local client
             try:
-                collection_id = int(collection_key)  # Assuming key is numeric for local
+                collection_id = int(collection_key)
                 tag_freq = local_client.get_tags_for_collection(collection_id)
                 
                 if tag_freq:
