@@ -848,8 +848,7 @@ def export_results(n_clicks, processed_tags):
 @callback(
     [Output("filter-presets-data", "data"),
      Output("filter-presets", "options")],
-    [Input("save-filter-btn", "n_clicks"),
-     Input("app", "id")],  # Trigger on app init
+    Input("save-filter-btn", "n_clicks"),
     State("search-input", "value"),
     State("min-freq", "value"),
     State("max-freq", "value"),
@@ -859,18 +858,17 @@ def export_results(n_clicks, processed_tags):
     State("languages-filter", "value"),
     State("start-year", "value"),
     State("end-year", "value"),
-    State("filter-presets-data", "data")
+    State("filter-presets-data", "data"),
+    prevent_initial_call=True
 )
-def manage_filter_presets(save_clicks, app_id, search_term, min_freq, max_freq, boolean_query, 
+def manage_filter_presets(save_clicks, search_term, min_freq, max_freq, boolean_query, 
                          creator_filter, item_types, languages, start_year, end_year, existing_presets):
-    ctx = callback_context
-    
     # Initialize presets if empty
     if existing_presets is None:
         existing_presets = []
     
     # If save button was clicked, create new preset
-    if ctx.triggered and ctx.triggered[0]["prop_id"] == "save-filter-btn.n_clicks" and save_clicks:
+    if save_clicks:
         # Create filter criteria
         from advanced_filters import FilterCriteria, AdvancedFilter
         
@@ -908,6 +906,25 @@ def manage_filter_presets(save_clicks, app_id, search_term, min_freq, max_freq, 
     # Load presets from database if not in memory
     if not existing_presets:
         existing_presets = db.get_preference("filter_presets", [])
+    
+    # Create options for dropdown
+    options = [{"label": preset["name"], "value": i} for i, preset in enumerate(existing_presets)]
+    
+    return existing_presets, options
+
+# Initialize filter presets on app start
+@callback(
+    [Output("filter-presets-data", "data", allow_duplicate=True),
+     Output("filter-presets", "options", allow_duplicate=True)],
+    Input("tags-data", "data")  # Trigger when tags are first loaded
+)
+def initialize_filter_presets(tags_data):
+    """Initialize filter presets from database on app start"""
+    if tags_data is None:
+        return [], []
+    
+    # Load existing presets from database
+    existing_presets = db.get_preference("filter_presets", [])
     
     # Create options for dropdown
     options = [{"label": preset["name"], "value": i} for i, preset in enumerate(existing_presets)]
