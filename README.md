@@ -64,14 +64,26 @@ uv run python app.py
 
 2. **Open your browser** and navigate to `http://127.0.0.1:8050`
 
-3. **Enter your Zotero credentials** in the web interface:
+3. **Choose your connection method**:
+
+### Local Zotero Mode (Faster)
+1. **Start Zotero desktop application**
+2. **Enable local API access**:
+   - Go to **Zotero → Settings → Advanced → Config Editor**
+   - Set `extensions.zotero.httpServer.enabled` to `true`
+   - Set `extensions.zotero.httpServer.port` to `23119`
+   - Enable **"Allow other applications on this computer to communicate with Zotero"** in Settings → Advanced
+3. **Select "Local Zotero Instance"** in the web app
+4. **Click "Load Tags from Local Zotero"**
+
+### Web API Mode (Internet Required)
+1. **Select "Web API"** in the web app
+2. **Enter your Zotero credentials**:
    - Library ID
-   - Library Type (user or group)
+   - Library Type (user or group)  
    - API Key
-
-4. **Test your connection** by clicking "Test Connection"
-
-5. **Load your tags** by clicking "Load Tags"
+3. **Test your connection** by clicking "Test Connection"
+4. **Load your tags** by clicking "Load Tags"
 
 6. **Apply filters** to customize your visualization:
    - **Search Tags**: Filter tags containing specific keywords

@@ -46,17 +46,35 @@ class TagProcessor:
         Returns:
             Dictionary mapping tag names to their frequencies
         """
+        print(f"DEBUG: Processing {len(items_data)} items for tags")
         all_tags = []
+        items_with_tags = 0
         
-        for item in items_data:
+        for i, item in enumerate(items_data):
             if 'data' in item and 'tags' in item['data']:
-                for tag_info in item['data']['tags']:
+                item_tags = item['data']['tags']
+                if item_tags:  # Only count items that actually have tags
+                    items_with_tags += 1
+                    if i < 3:  # Debug first few items
+                        print(f"DEBUG: Item {i} has {len(item_tags)} tags: {[t.get('tag', t) if isinstance(t, dict) else str(t) for t in item_tags[:3]]}")
+                
+                for tag_info in item_tags:
                     if isinstance(tag_info, dict) and 'tag' in tag_info:
                         all_tags.append(tag_info['tag'])
                     elif isinstance(tag_info, str):
                         all_tags.append(tag_info)
         
+        print(f"DEBUG: Found {items_with_tags} items with tags out of {len(items_data)} total items")
+        print(f"DEBUG: Collected {len(all_tags)} total tag instances")
+        
         tag_freq = Counter(all_tags)
+        print(f"DEBUG: Found {len(tag_freq)} unique tags")
+        
+        # Show top 5 most frequent tags
+        if tag_freq:
+            top_tags = tag_freq.most_common(5)
+            print(f"DEBUG: Top 5 tags: {top_tags}")
+        
         self.processed_tags = dict(tag_freq)
         return self.processed_tags
     

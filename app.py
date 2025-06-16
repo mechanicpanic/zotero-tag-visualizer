@@ -1,5 +1,5 @@
 import dash
-from dash import dcc, html, Input, Output, State, callback_context
+from dash import dcc, html, Input, Output, State, callback_context, DiskcacheManager, callback, no_update
 import plotly.graph_objects as go
 import plotly.express as px
 from wordcloud import WordCloud
@@ -8,11 +8,21 @@ import io
 import base64
 from PIL import Image
 import dash_bootstrap_components as dbc
+import diskcache
+import hashlib
 
 from zotero_client import ZoteroClient
 from tag_processor import TagProcessor
+from zotero_local_client import ZoteroLocalClient, detect_local_zotero
+from database import db
 
-app = dash.Dash(__name__, external_stylesheets=[dbc.themes.BOOTSTRAP])
+# Initialize background callback manager
+cache = diskcache.Cache("./cache")
+background_callback_manager = DiskcacheManager(cache)
+
+app = dash.Dash(__name__, external_stylesheets=[dbc.themes.BOOTSTRAP],
+                background_callback_manager=background_callback_manager,
+                suppress_callback_exceptions=True)
 
 app.layout = dbc.Container([
     dbc.Row([
@@ -22,57 +32,78 @@ app.layout = dbc.Container([
         ])
     ]),
     
+    # Connection Type Selection
+    dbc.Row([
+        dbc.Col([
+            dbc.Card([
+                dbc.CardHeader("Connection Type"),
+                dbc.CardBody([
+                    dbc.RadioItems(
+                        id="connection-type",
+                        options=[
+                            {"label": "Local Zotero Instance (Faster)", "value": "local"},
+                            {"label": "Web API (Internet Required)", "value": "web"}
+                        ],
+                        value="local",
+                        inline=True
+                    ),
+                    html.Div(id="connection-status", className="mt-2")
+                ])
+            ], className="mb-3")
+        ])
+    ]),
+    
+    # Configuration Panel
     dbc.Row([
         dbc.Col([
             dbc.Card([
                 dbc.CardHeader("Zotero Configuration"),
                 dbc.CardBody([
+                    html.Div(id="config-panel")
+                ])
+            ], className="mb-4")
+        ])
+    ]),
+    
+    # Progress Section
+    dbc.Row([
+        dbc.Col([
+            html.Div([
+                dbc.Progress(
+                    id="progress-bar",
+                    value=0,
+                    striped=True,
+                    animated=True,
+                    style={"display": "none"}
+                ),
+                html.Div(id="progress-text", className="mt-2")
+            ], id="progress-section")
+        ])
+    ]),
+    
+    # Cache Management Section
+    dbc.Row([
+        dbc.Col([
+            dbc.Card([
+                dbc.CardHeader("Cache & Storage"),
+                dbc.CardBody([
                     dbc.Row([
                         dbc.Col([
-                            dbc.Label("Library ID:"),
-                            dbc.Input(
-                                id="library-id",
-                                type="text",
-                                placeholder="Enter your Zotero library ID",
-                                value=""
-                            )
-                        ], width=4),
+                            html.Div(id="cache-stats"),
+                            dbc.ButtonGroup([
+                                dbc.Button("Use Cache", id="use-cache-btn", color="success", size="sm"),
+                                dbc.Button("Clear Cache", id="clear-cache-btn", color="warning", size="sm"),
+                                dbc.Button("Refresh", id="refresh-cache-btn", color="info", size="sm")
+                            ])
+                        ], width=8),
                         dbc.Col([
-                            dbc.Label("Library Type:"),
+                            dbc.Label("Recent Libraries:"),
                             dcc.Dropdown(
-                                id="library-type",
-                                options=[
-                                    {"label": "User Library", "value": "user"},
-                                    {"label": "Group Library", "value": "group"}
-                                ],
-                                value="user"
-                            )
-                        ], width=4),
-                        dbc.Col([
-                            dbc.Label("API Key:"),
-                            dbc.Input(
-                                id="api-key",
-                                type="password",
-                                placeholder="Enter your Zotero API key",
-                                value=""
+                                id="recent-libraries",
+                                placeholder="Select a recent library...",
+                                options=[]
                             )
                         ], width=4)
-                    ]),
-                    html.Br(),
-                    dbc.Row([
-                        dbc.Col([
-                            dbc.Button(
-                                "Load Tags",
-                                id="load-tags-btn",
-                                color="primary",
-                                className="me-2"
-                            ),
-                            dbc.Button(
-                                "Test Connection",
-                                id="test-connection-btn",
-                                color="secondary"
-                            )
-                        ])
                     ])
                 ])
             ], className="mb-4")
@@ -156,65 +187,215 @@ app.layout = dbc.Container([
     
     # Store components for data persistence
     dcc.Store(id="tags-data"),
-    dcc.Store(id="processed-tags")
+    dcc.Store(id="processed-tags"),
+    dcc.Store(id="connection-config"),
+    dcc.Store(id="cache-info"),
+    dcc.Interval(id="progress-interval", interval=1000, n_intervals=0, disabled=True)
 ])
 
-@app.callback(
+# Callback to update connection status and config panel
+@callback(
+    [Output("connection-status", "children"),
+     Output("config-panel", "children")],
+    Input("connection-type", "value")
+)
+def update_connection_type(connection_type):
+    if connection_type == "local":
+        # Check local Zotero status
+        is_available = detect_local_zotero()
+        
+        if is_available:
+            status = dbc.Alert("✅ Local Zotero instance detected", color="success")
+            config = [
+                dbc.Row([
+                    dbc.Col([
+                        dbc.Button(
+                            "Load Tags from Local Zotero",
+                            id="load-tags-btn",
+                            color="primary",
+                            className="me-2"
+                        ),
+                        dbc.Button(
+                            "Test Local Connection",
+                            id="test-connection-btn",
+                            color="secondary"
+                        )
+                    ])
+                ])
+            ]
+        else:
+            status = dbc.Alert("❌ Local Zotero not detected. Please ensure Zotero is running.", color="warning")
+            config = [
+                dbc.Alert("Start Zotero desktop application to use local mode.", color="info")
+            ]
+    
+    else:  # web API
+        status = dbc.Alert("🌐 Web API mode selected", color="info")
+        config = [
+            dbc.Row([
+                dbc.Col([
+                    dbc.Label("Library ID:"),
+                    dbc.Input(
+                        id="web-library-id",
+                        type="text",
+                        placeholder="Enter your Zotero library ID",
+                        value=db.get_preference("last_library_id", "")
+                    )
+                ], width=4),
+                dbc.Col([
+                    dbc.Label("Library Type:"),
+                    dcc.Dropdown(
+                        id="web-library-type",
+                        options=[
+                            {"label": "User Library", "value": "user"},
+                            {"label": "Group Library", "value": "group"}
+                        ],
+                        value=db.get_preference("last_library_type", "user")
+                    )
+                ], width=4),
+                dbc.Col([
+                    dbc.Label("API Key:"),
+                    dbc.Input(
+                        id="web-api-key",
+                        type="password",
+                        placeholder="Enter your Zotero API key",
+                        value=""  # Never save API keys in preferences
+                    )
+                ], width=4)
+            ]),
+            html.Br(),
+            dbc.Row([
+                dbc.Col([
+                    dbc.Button(
+                        "Load Tags",
+                        id="load-tags-btn",
+                        color="primary",
+                        className="me-2"
+                    ),
+                    dbc.Button(
+                        "Test Connection",
+                        id="test-connection-btn",
+                        color="secondary"
+                    )
+                ])
+            ])
+        ]
+    
+    return status, config
+
+# Callback to update cache statistics
+@callback(
+    Output("cache-stats", "children"),
+    [Input("cache-info", "data"),
+     Input("clear-cache-btn", "n_clicks"),
+     Input("refresh-cache-btn", "n_clicks")]
+)
+def update_cache_stats(cache_info, clear_clicks, refresh_clicks):
+    ctx = callback_context
+    
+    if ctx.triggered and ctx.triggered[0]["prop_id"] == "clear-cache-btn.n_clicks":
+        db.clear_all_cache()
+    
+    stats = db.get_cache_stats()
+    
+    return dbc.Row([
+        dbc.Col([
+            html.Small(f"Libraries: {stats['total_libraries']}", className="text-muted me-3"),
+            html.Small(f"Tags: {stats['total_tags']}", className="text-muted me-3"),
+            html.Small(f"Recent: {stats['recent_activity']}", className="text-muted")
+        ])
+    ])
+
+# Callback to update recent libraries dropdown
+@callback(
+    Output("recent-libraries", "options"),
+    Input("cache-info", "data")
+)
+def update_recent_libraries(cache_info):
+    recent = db.get_recent_libraries()
+    return [
+        {
+            "label": f"{name} ({lib_type}) - {last_updated[:10]}",
+            "value": f"{lib_id}|{lib_type}"
+        }
+        for lib_id, lib_type, name, last_updated in recent
+    ]
+
+@callback(
     Output("status-message", "children"),
     Input("test-connection-btn", "n_clicks"),
-    State("library-id", "value"),
-    State("library-type", "value"),
-    State("api-key", "value"),
+    State("connection-type", "value"),
     prevent_initial_call=True
 )
-def test_connection(n_clicks, library_id, library_type, api_key):
-    if not all([library_id, library_type, api_key]):
-        return dbc.Alert("Please fill in all required fields.", color="warning")
+def test_local_connection(n_clicks, connection_type):
+    if connection_type == "local":
+        try:
+            local_client = ZoteroLocalClient()
+            if local_client.test_connection():
+                return dbc.Alert("✅ Local Zotero connection successful!", color="success")
+            else:
+                return dbc.Alert("❌ Local Zotero connection failed.", color="danger")
+        except Exception as e:
+            return dbc.Alert(f"Local connection error: {str(e)}", color="danger")
     
-    try:
-        client = ZoteroClient(library_id, library_type, api_key)
-        if client.test_connection():
-            return dbc.Alert("Connection successful!", color="success")
-        else:
-            return dbc.Alert("Connection failed. Please check your credentials.", color="danger")
-    except Exception as e:
-        return dbc.Alert(f"Error: {str(e)}", color="danger")
+    else:  # web API
+        return dbc.Alert("💡 For Web API: Fill in your credentials above and they'll be tested automatically when you load tags.", color="info")
 
-@app.callback(
+# Note: Web API test connection will be handled differently
+# since the web inputs are dynamically created
+
+@callback(
     [Output("tags-data", "data"),
-     Output("status-message", "children", allow_duplicate=True)],
+     Output("status-message", "children", allow_duplicate=True),
+     Output("progress-bar", "style"),
+     Output("progress-interval", "disabled")],
     Input("load-tags-btn", "n_clicks"),
-    State("library-id", "value"),
-    State("library-type", "value"),
-    State("api-key", "value"),
+    State("connection-type", "value"),
+    background=True,
+    running=[
+        (Output("load-tags-btn", "disabled"), True, False),
+        (Output("progress-bar", "style"), {"display": "block"}, {"display": "none"}),
+    ],
+    progress=[Output("progress-bar", "value"), Output("progress-text", "children")],
     prevent_initial_call=True
 )
-def load_tags(n_clicks, library_id, library_type, api_key):
-    if not all([library_id, library_type, api_key]):
-        return None, dbc.Alert("Please fill in all required fields.", color="warning")
+def load_tags_background(set_progress, n_clicks, connection_type):
+    if connection_type == "web":
+        return None, dbc.Alert("💡 Web API mode is not fully implemented yet. Please use Local Zotero mode for now.", color="info"), {"display": "none"}, True
     
     try:
-        client = ZoteroClient(library_id, library_type, api_key)
+        # local connection - no progress bar needed for fast local access
+        local_client = ZoteroLocalClient()
+        tag_freq = local_client.get_all_tags_with_frequencies()
         
-        # Try fetching tags directly first
-        tags_data = client.fetch_all_tags()
-        
-        if not tags_data:
-            # Fallback: fetch items and extract tags
-            items_data = client.get_items_with_tags()
-            processor = TagProcessor()
-            tag_freq = processor.process_items_tags(items_data)
+        if tag_freq:
+            # Save to cache with local identifier
+            local_lib_id = "local_library"
+            db.save_library_info(local_lib_id, "local", "Local Zotero Library")
+            db.save_tags(local_lib_id, "local", tag_freq)
+            
             tags_data = [{"tag": tag, "meta": {"numItems": count}} for tag, count in tag_freq.items()]
-        
-        if tags_data:
-            return tags_data, dbc.Alert(f"Successfully loaded {len(tags_data)} tags!", color="success")
+            
+            # Create centered, bigger "Completed!" message
+            completed_message = html.Div([
+                html.H3("🎉 Completed!", className="text-center text-success", style={"fontSize": "2rem", "margin": "20px 0"})
+            ], className="text-center")
+            
+            return tags_data, completed_message, {"display": "none"}, True
         else:
-            return None, dbc.Alert("No tags found in your library.", color="warning")
+            return None, dbc.Alert([
+                "❌ Could not fetch tags from local Zotero. ",
+                html.Br(),
+                "Make sure you've enabled 'Allow other applications on this computer to communicate with Zotero' in Zotero Settings → Advanced.",
+                html.Br(),
+                "Try the 'Test Local Connection' button first."
+            ], color="warning"), {"display": "none"}, True
             
     except Exception as e:
-        return None, dbc.Alert(f"Error loading tags: {str(e)}", color="danger")
+        print(f"ERROR: {str(e)}")
+        return None, dbc.Alert(f"Error loading tags: {str(e)}", color="danger"), {"display": "none"}, True
 
-@app.callback(
+@callback(
     [Output("processed-tags", "data"),
      Output("tag-cloud-container", "children"),
      Output("tag-statistics", "children")],
@@ -346,7 +527,7 @@ def update_visualization(n_clicks, tags_data, search_term, min_freq, max_freq, m
         return None, html.Div(f"Error generating visualization: {str(e)}"), html.Div()
 
 # Auto-apply filters when tags are loaded
-@app.callback(
+@callback(
     Output("apply-filters-btn", "n_clicks"),
     Input("tags-data", "data"),
     prevent_initial_call=True
@@ -357,4 +538,4 @@ def auto_apply_filters(tags_data):
     return 0
 
 if __name__ == "__main__":
-    app.run(debug=True)
+    app.run(debug=True, port=8051)  # Use port 8051 instead
