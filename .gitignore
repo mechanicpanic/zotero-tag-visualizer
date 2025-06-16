@@ -166,3 +166,10 @@ cython_debug/
 .Trashes
 ehthumbs.db
 Thumbs.db
+
+# Cache and database files
+cache/
+*.db
+*.db-shm
+*.db-wal
+zotero_cache.db
