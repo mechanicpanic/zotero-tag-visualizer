@@ -38,26 +38,22 @@ app.layout = dbc.Container([
     dbc.Row([
         # Left Sidebar - Connection & Configuration
         dbc.Col([
-            # Connection Type Selection
+            # Connection & Configuration Panel
             dbc.Card([
-                dbc.CardHeader("Connection Type"),
+                dbc.CardHeader("Zotero Connection"),
                 dbc.CardBody([
+                    dbc.Label("Connection Type:", className="small fw-bold"),
                     dbc.RadioItems(
                         id="connection-type",
                         options=[
                             {"label": "Local Zotero", "value": "local"},
                             {"label": "Web API", "value": "web"}
                         ],
-                        value="local"
+                        value="local",
+                        className="mb-2"
                     ),
-                    html.Div(id="connection-status", className="mt-2")
-                ])
-            ], className="mb-3"),
-            
-            # Configuration Panel
-            dbc.Card([
-                dbc.CardHeader("Configuration"),
-                dbc.CardBody([
+                    html.Div(id="connection-status", className="mb-3"),
+                    html.Hr(),
                     html.Div(id="config-panel")
                 ])
             ], className="mb-3"),
@@ -279,7 +275,7 @@ app.layout = dbc.Container([
                     ),
                     html.Br(),
                     dbc.Button(
-                        "Load Collection",
+                        "Load",
                         id="load-collection-tags-btn",
                         color="primary",
                         size="sm",
@@ -361,13 +357,13 @@ def update_connection_type(connection_type):
                 dbc.Row([
                     dbc.Col([
                         dbc.Button(
-                            "Load Tags from Local Zotero",
+                            "Load Tags",
                             id="load-tags-btn",
                             color="primary",
                             className="me-2"
                         ),
                         dbc.Button(
-                            "Test Local Connection",
+                            "Test",
                             id="test-connection-btn",
                             color="secondary"
                         )
@@ -424,7 +420,7 @@ def update_connection_type(connection_type):
                         className="me-2"
                     ),
                     dbc.Button(
-                        "Test Connection",
+                        "Test",
                         id="test-connection-btn",
                         color="secondary"
                     )
