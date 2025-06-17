@@ -82,10 +82,12 @@ class ZoteroLocalClient:
                 return response.json()
             else:
                 print(f"DEBUG: JavaScript execution failed: {response.status_code}")
+                print(f"DEBUG: Response content: {response.text[:200]}")
                 return None
                 
         except requests.exceptions.RequestException as e:
             print(f"DEBUG: JavaScript execution error: {e}")
+            print(f"DEBUG: Debug bridge endpoint: {endpoint}")
             return None
     
     def get_all_tags_with_frequencies(self) -> Dict[str, int]:
@@ -166,78 +168,78 @@ class ZoteroLocalClient:
     
     def get_collections(self) -> List[Dict]:
         """
-        Get all collections from local Zotero
+        Get all collections from local Zotero using REST API
         
         Returns:
             List of collection dictionaries
         """
-        script = """
-        // Get all collections
-        let collections = [];
-        let allCollections = Zotero.Collections.getAll();
+        try:
+            print("DEBUG: Getting collections via REST API...")
+            response = self.session.get(f"{self.base_url}/api/users/0/collections", timeout=30)
+            
+            if response.status_code == 200:
+                collections_data = response.json()
+                collections = []
+                
+                for col in collections_data:
+                    data = col.get('data', {})
+                    collections.append({
+                        'key': col.get('key'),
+                        'id': col.get('key'),  # Use key as id for REST API
+                        'name': data.get('name', 'Unknown Collection'),
+                        'parentCollection': data.get('parentCollection'),
+                        'itemCount': 0  # Will be populated separately if needed
+                    })
+                
+                print(f"DEBUG: Found {len(collections)} collections via REST API")
+                return collections
+            
+            else:
+                print(f"DEBUG: Collections API failed with status {response.status_code}")
+                return []
         
-        for (let collection of allCollections) {
-            collections.push({
-                id: collection.id,
-                key: collection.key,
-                name: collection.name,
-                parentID: collection.parentID,
-                itemCount: collection.getChildItems().length
-            });
-        }
-        
-        return collections;
-        """
-        
-        result = self.execute_javascript(script)
-        
-        if result and 'return' in result:
-            return result['return'] or []
-        
-        return []
+        except Exception as e:
+            print(f"DEBUG: Error getting collections via REST API: {e}")
+            return []
     
-    def get_tags_for_collection(self, collection_id: int) -> Dict[str, int]:
+    def get_tags_for_collection(self, collection_key: str) -> Dict[str, int]:
         """
-        Get tags with frequencies for a specific collection
+        Get tags with frequencies for a specific collection using REST API
         
         Args:
-            collection_id: Zotero collection ID
+            collection_key: Zotero collection key (string)
             
         Returns:
             Dictionary mapping tag names to frequencies
         """
-        script = f"""
-        // Get tags for specific collection
-        let tags = {{}};
-        let collection = Zotero.Collections.get({collection_id});
-        
-        if (collection) {{
-            let items = collection.getChildItems();
+        try:
+            print(f"DEBUG: Getting tags for collection {collection_key} via REST API...")
             
-            for (let item of items) {{
-                if (item.isRegularItem()) {{
-                    let itemTags = item.getTags();
-                    for (let tagObj of itemTags) {{
-                        let tagName = tagObj.tag;
-                        if (tags[tagName]) {{
-                            tags[tagName]++;
-                        }} else {{
-                            tags[tagName] = 1;
-                        }}
-                    }}
-                }}
-            }}
-        }}
+            # Get items in the collection
+            url = f"{self.base_url}/api/users/0/collections/{collection_key}/items?itemType=-annotation&itemType=-attachment"
+            response = self.session.get(url, timeout=30)
+            
+            if response.status_code == 200:
+                items = response.json()
+                tag_freq = {}
+                
+                for item in items:
+                    item_tags = item.get('data', {}).get('tags', [])
+                    for tag_obj in item_tags:
+                        tag_name = tag_obj.get('tag')
+                        if tag_name:
+                            tag_freq[tag_name] = tag_freq.get(tag_name, 0) + 1
+                
+                print(f"DEBUG: Found {len(tag_freq)} unique tags in collection {collection_key}")
+                return tag_freq
+            
+            else:
+                print(f"DEBUG: Collection items API failed with status {response.status_code}")
+                return {}
         
-        return tags;
-        """
-        
-        result = self.execute_javascript(script)
-        
-        if result and 'return' in result:
-            return result['return'] or {}
-        
-        return {}
+        except Exception as e:
+            print(f"DEBUG: Error getting collection tags via REST API: {e}")
+            return {}
     
     def search_items(self, query: str) -> List[Dict]:
         """
@@ -564,6 +566,8 @@ class ZoteroLocalClient:
         Returns:
             Dictionary with metadata statistics
         """
+        print("DEBUG: Attempting to get metadata summary via JavaScript execution...")
+        
         script = """
         // Library metadata summary
         let summary = {
@@ -627,9 +631,150 @@ class ZoteroLocalClient:
         result = self.execute_javascript(script)
         
         if result and 'return' in result:
+            print(f"DEBUG: JavaScript execution successful, got {len(result['return'])} keys")
             return result['return'] or {}
         
-        return {}
+        print("DEBUG: JavaScript execution failed, trying fallback API method...")
+        # Fallback: Try to get basic metadata via local API
+        return self._get_metadata_fallback()
+        
+    def _get_metadata_fallback(self) -> Dict[str, any]:
+        """
+        Fallback method to get basic metadata using local API
+        
+        Returns:
+            Dictionary with basic metadata statistics
+        """
+        try:
+            print("DEBUG: Using fallback API method to get metadata...")
+            
+            # Get sample of top-level items to extract metadata (exclude annotations and attachments)
+            response = self.session.get(f"{self.base_url}/api/users/0/items?itemType=-annotation&itemType=-attachment&limit=100", timeout=30)
+            
+            if response.status_code == 200:
+                items_data = response.json()
+                
+                summary = {
+                    'itemTypes': {},
+                    'languages': {},
+                    'years': {},
+                    'creators': {},
+                    'totalItems': len(items_data)
+                }
+                
+                for item in items_data:
+                    data = item.get('data', {})
+                    
+                    # Item type
+                    item_type = data.get('itemType')
+                    if item_type:
+                        summary['itemTypes'][item_type] = summary['itemTypes'].get(item_type, 0) + 1
+                    
+                    # Language
+                    language = data.get('language')
+                    if language:
+                        summary['languages'][language] = summary['languages'].get(language, 0) + 1
+                    
+                    # Year from date
+                    date = data.get('date')
+                    if date:
+                        import re
+                        year_match = re.search(r'\b(19|20)\d{2}\b', str(date))
+                        if year_match:
+                            year = year_match.group(0)
+                            summary['years'][year] = summary['years'].get(year, 0) + 1
+                    
+                    # Creators
+                    creators = data.get('creators', [])
+                    for creator in creators:
+                        last_name = creator.get('lastName')
+                        if last_name:
+                            summary['creators'][last_name] = summary['creators'].get(last_name, 0) + 1
+                
+                print(f"DEBUG: Fallback method found {len(summary['itemTypes'])} item types, {len(summary['languages'])} languages")
+                return summary
+            
+            else:
+                print(f"DEBUG: Fallback API call failed with status {response.status_code}")
+                
+        except Exception as e:
+            print(f"DEBUG: Fallback method error: {e}")
+        
+        # Return empty summary if all methods fail
+        return {
+            'itemTypes': {},
+            'languages': {},
+            'years': {},
+            'creators': {},
+            'totalItems': 0
+        }
+    
+    def get_items_by_metadata(self, item_types=None, languages=None, start_year=None, end_year=None, limit=1000):
+        """
+        Get items filtered by metadata criteria
+        
+        Args:
+            item_types: List of item types to include
+            languages: List of languages to include  
+            start_year: Start year for date filtering
+            end_year: End year for date filtering
+            limit: Maximum number of items to return
+            
+        Returns:
+            List of item dictionaries matching criteria
+        """
+        try:
+            # Build query parameters - exclude annotations and attachments
+            url = f"{self.base_url}/api/users/0/items?limit={limit}&itemType=-annotation&itemType=-attachment"
+            
+            response = self.session.get(url, timeout=30)
+            
+            if response.status_code == 200:
+                items_data = response.json()
+                filtered_items = []
+                
+                for item in items_data:
+                    data = item.get('data', {})
+                    
+                    # Filter by item type
+                    if item_types:
+                        item_type = data.get('itemType')
+                        if item_type not in item_types:
+                            continue
+                    
+                    # Filter by language
+                    if languages:
+                        language = data.get('language')
+                        if language not in languages:
+                            continue
+                    
+                    # Filter by year
+                    if start_year or end_year:
+                        date = data.get('date')
+                        if date:
+                            import re
+                            year_match = re.search(r'\b(19|20)\d{2}\b', str(date))
+                            if year_match:
+                                year = int(year_match.group(0))
+                                if start_year and year < start_year:
+                                    continue
+                                if end_year and year > end_year:
+                                    continue
+                            else:
+                                continue  # No valid year found, skip if year filtering requested
+                        else:
+                            continue  # No date, skip if year filtering requested
+                    
+                    filtered_items.append(item)
+                
+                print(f"DEBUG: Filtered {len(filtered_items)} items from {len(items_data)} total")
+                return filtered_items
+            
+            return []
+            
+        except Exception as e:
+            print(f"ERROR: Failed to get filtered items: {e}")
+            return []
     
     def export_filtered_data(self, 
                            collection_id: int = None,

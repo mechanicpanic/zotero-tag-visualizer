@@ -122,6 +122,17 @@ app.layout = dbc.Container([
                     )
                 ]),
                 dbc.CardBody([
+                    # Apply Filters Button - Prominently placed at top
+                    html.Div([
+                        dbc.Button(
+                            "Apply Filters",
+                            id="apply-filters-btn",
+                            color="primary",
+                            size="sm",
+                            className="w-100"
+                        )
+                    ], className="text-center mb-3"),
+                    
                     # Basic Filters (Always Visible)
                     dbc.Label("Search Tags:", className="small"),
                     dbc.Input(
@@ -165,14 +176,6 @@ app.layout = dbc.Container([
                         value=50,
                         size="sm",
                         className="mb-2"
-                    ),
-                    
-                    dbc.Button(
-                        "Apply Filters",
-                        id="apply-filters-btn",
-                        color="info",
-                        size="sm",
-                        className="mb-3"
                     ),
                     
                     # Advanced Filters (Collapsible)
@@ -530,12 +533,54 @@ def load_tags_background(set_progress, n_clicks, connection_type):
                 # Get metadata summary for filter options
                 try:
                     metadata_summary = local_client.get_library_metadata_summary()
-                    item_types_options = [{"label": item_type, "value": item_type} 
-                                         for item_type in metadata_summary.get('itemTypes', {}).keys()]
-                    languages_options = [{"label": lang, "value": lang} 
-                                       for lang in metadata_summary.get('languages', {}).keys()]
-                except:
+                    print(f"DEBUG: Metadata summary retrieved: {metadata_summary is not None}")
+                    
+                    if metadata_summary:
+                        print(f"DEBUG: Item types found: {list(metadata_summary.get('itemTypes', {}).keys())}")
+                        print(f"DEBUG: Languages found: {list(metadata_summary.get('languages', {}).keys())}")
+                        
+                        # Get item types and add common fallbacks if none found
+                        item_types_dict = metadata_summary.get('itemTypes', {})
+                        if not item_types_dict:
+                            print("DEBUG: No item types found, adding common fallbacks")
+                            item_types_dict = {
+                                'book': 0, 'journalArticle': 0, 'thesis': 0, 'report': 0, 
+                                'webpage': 0, 'conferencePaper': 0, 'document': 0
+                            }
+                        
+                        item_types_options = [{"label": item_type.replace('_', ' ').title(), "value": item_type} 
+                                             for item_type in sorted(item_types_dict.keys())]
+                        
+                        # Get languages and add common fallbacks if none found  
+                        languages_dict = metadata_summary.get('languages', {})
+                        if not languages_dict:
+                            print("DEBUG: No languages found, adding common fallbacks")
+                            languages_dict = {
+                                'en': 0, 'English': 0, 'en-US': 0, 'Spanish': 0, 'French': 0, 'German': 0
+                            }
+                        
+                        languages_options = [{"label": lang, "value": lang} 
+                                           for lang in sorted(languages_dict.keys())]
+                    else:
+                        print("DEBUG: Metadata summary is None, using fallbacks")
+                        item_types_options = [
+                            {"label": "Book", "value": "book"},
+                            {"label": "Journal Article", "value": "journalArticle"},
+                            {"label": "Thesis", "value": "thesis"},
+                            {"label": "Report", "value": "report"},
+                            {"label": "Webpage", "value": "webpage"},
+                            {"label": "Conference Paper", "value": "conferencePaper"}
+                        ]
+                        languages_options = [
+                            {"label": "English", "value": "en"},
+                            {"label": "Spanish", "value": "es"},
+                            {"label": "French", "value": "fr"},
+                            {"label": "German", "value": "de"}
+                        ]
+                        
+                except Exception as e:
                     # Fallback if metadata fetch fails
+                    print(f"DEBUG: Metadata fetch failed with error: {str(e)}")
                     item_types_options = []
                     languages_options = []
                 
@@ -585,10 +630,11 @@ def toggle_advanced_filters(n_clicks, is_open):
     State("end-year", "value"),
     State("creator-filter", "value"),
     State("languages-filter", "value"),
+    State("collections-filter", "value"),
     prevent_initial_call=True
 )
 def update_visualization_advanced(n_clicks, tags_data, search_term, min_freq, max_freq, max_tags,
-                                  boolean_query, item_types, start_year, end_year, creator_filter, languages):
+                                  boolean_query, item_types, start_year, end_year, creator_filter, languages, collections):
     if not tags_data:
         return None, html.Div("No tags data available. Please load tags first."), html.Div()
     
@@ -604,15 +650,73 @@ def update_visualization_advanced(n_clicks, tags_data, search_term, min_freq, ma
         if boolean_query:
             tag_freq = processor.get_tags_by_boolean_query(boolean_query)
         
+        # Update processor with current results before applying frequency filters
+        processor.processed_tags = tag_freq
+        
         # Apply frequency filters
         min_freq = min_freq or 1
         filtered_tags = processor.filter_by_frequency(min_freq, max_freq)
+        
+        # Apply metadata-based filters (item types, languages, years)
+        if item_types or languages or start_year or end_year:
+            try:
+                from zotero_local_client import ZoteroLocalClient
+                local_client = ZoteroLocalClient()
+                
+                # Get items that match metadata criteria
+                matching_items = local_client.get_items_by_metadata(
+                    item_types=item_types,
+                    languages=languages, 
+                    start_year=start_year,
+                    end_year=end_year
+                )
+                
+                # Extract tags from matching items
+                metadata_tags = set()
+                for item in matching_items:
+                    item_tags = item.get('data', {}).get('tags', [])
+                    for tag_obj in item_tags:
+                        tag_name = tag_obj.get('tag')
+                        if tag_name:
+                            metadata_tags.add(tag_name)
+                
+                # Filter to only include tags from items matching metadata criteria
+                if metadata_tags:
+                    filtered_tags = {tag: freq for tag, freq in filtered_tags.items() 
+                                   if tag in metadata_tags}
+                    print(f"DEBUG: Metadata filtering reduced tags to {len(filtered_tags)} from {len(metadata_tags)} unique item tags")
+                else:
+                    print("DEBUG: No tags found in items matching metadata criteria")
+                    filtered_tags = {}
+                    
+            except Exception as e:
+                print(f"Error applying metadata filters: {e}")
         
         # Apply advanced text filters if provided
         if creator_filter:
             # For now, just filter tags containing creator name
             filtered_tags = {tag: freq for tag, freq in filtered_tags.items() 
                            if creator_filter.lower() in tag.lower()}
+        
+        # Apply collection filter if provided
+        if collections:
+            try:
+                from zotero_local_client import ZoteroLocalClient
+                local_client = ZoteroLocalClient()
+                
+                # Get tags from selected collections
+                collection_tags = set()
+                for collection_key in collections:
+                    if collection_key != "disabled":  # Skip disabled placeholder
+                        collection_tag_freq = local_client.get_tags_for_collection(collection_key)
+                        collection_tags.update(collection_tag_freq.keys())
+                
+                # Filter to only include tags that exist in selected collections
+                filtered_tags = {tag: freq for tag, freq in filtered_tags.items() 
+                               if tag in collection_tags}
+                
+            except Exception as e:
+                print(f"Error applying collection filter: {e}")
         
         if max_tags:
             processor.processed_tags = filtered_tags
@@ -727,13 +831,14 @@ def update_visualization_advanced(n_clicks, tags_data, search_term, min_freq, ma
      Output("creator-filter", "value"),
      Output("item-types-filter", "value"),
      Output("languages-filter", "value"),
+     Output("collections-filter", "value"),
      Output("start-year", "value"),
      Output("end-year", "value")],
     Input("clear-filters-btn", "n_clicks"),
     prevent_initial_call=True
 )
 def clear_all_filters(n_clicks):
-    return "", 1, None, "", "", [], [], None, None
+    return "", 1, None, "", "", [], [], [], None, None
 
 # Collection browser callback
 @callback(
@@ -755,15 +860,57 @@ def update_collections(tags_data, connection_type):
             local_client = ZoteroLocalClient()
             collections = local_client.get_collections()
             
-            options = [{"label": f"{col['name']} ({col.get('itemCount', 0)} items)", 
-                       "value": col['id']} for col in collections if not col.get('parentID')]  # Use 'id' instead of 'key' for local
-            return options, False
+            if collections:
+                options = [{"label": f"{col['name']}", 
+                           "value": col['key']} for col in collections if not col.get('parentCollection')]  # Use 'key' for REST API
+                print(f"DEBUG: Created {len(options)} collection options")
+                return options, False
+            else:
+                print("DEBUG: No collections found via REST API")
+                return [], True
         
         return [], True
         
     except Exception as e:
         print(f"Error loading collections: {e}")
         return [], True
+
+# Populate collections filter dropdown
+@callback(
+    Output("collections-filter", "options"),
+    Input("tags-data", "data"),
+    State("connection-type", "value")
+)
+def populate_collections_filter(tags_data, connection_type):
+    """Populate collections filter dropdown with available collections"""
+    if not tags_data:
+        return []
+    
+    try:
+        if connection_type == "local":
+            local_client = ZoteroLocalClient()
+            collections = local_client.get_collections()
+            
+            if collections:
+                # Create options for collections filter
+                options = [
+                    {"label": col['name'], 
+                     "value": col['key']} 
+                    for col in collections 
+                    if not col.get('parentCollection')  # Only top-level collections
+                ]
+                print(f"DEBUG: Found {len(options)} collections for filter")
+                return options
+            else:
+                print("DEBUG: No collections found via REST API")
+                return []
+        
+        # Web API collections would need additional implementation
+        return [{"label": "Web API collections not yet supported", "value": "disabled", "disabled": True}]
+        
+    except Exception as e:
+        print(f"Error populating collections filter: {e}")
+        return [{"label": "Collections loading failed", "value": "disabled", "disabled": True}]
 
 # Export functionality callback
 @callback(
@@ -807,13 +954,14 @@ def export_results(n_clicks, processed_tags):
     State("creator-filter", "value"),
     State("item-types-filter", "value"),
     State("languages-filter", "value"),
+    State("collections-filter", "value"),
     State("start-year", "value"),
     State("end-year", "value"),
     State("filter-presets-data", "data"),
     prevent_initial_call=True
 )
 def manage_filter_presets(save_clicks, search_term, min_freq, max_freq, boolean_query, 
-                         creator_filter, item_types, languages, start_year, end_year, existing_presets):
+                         creator_filter, item_types, languages, collections, start_year, end_year, existing_presets):
     # Initialize presets if empty
     if existing_presets is None:
         existing_presets = []
@@ -830,6 +978,7 @@ def manage_filter_presets(save_clicks, search_term, min_freq, max_freq, boolean_
             end_year=end_year,
             creators=[creator_filter] if creator_filter else None,
             languages=languages,
+            collections=[str(cid) for cid in collections] if collections else None,
             min_frequency=min_freq,
             max_frequency=max_freq
         )
@@ -892,6 +1041,7 @@ def initialize_filter_presets(tags_data):
      Output("creator-filter", "value", allow_duplicate=True),
      Output("item-types-filter", "value", allow_duplicate=True),
      Output("languages-filter", "value", allow_duplicate=True),
+     Output("collections-filter", "value", allow_duplicate=True),
      Output("start-year", "value", allow_duplicate=True),
      Output("end-year", "value", allow_duplicate=True)],
     Input("filter-presets", "value"),
@@ -900,7 +1050,7 @@ def initialize_filter_presets(tags_data):
 )
 def load_filter_preset(preset_index, presets_data):
     if preset_index is None or not presets_data or preset_index >= len(presets_data):
-        return no_update, no_update, no_update, no_update, no_update, no_update, no_update, no_update, no_update
+        return no_update, no_update, no_update, no_update, no_update, no_update, no_update, no_update, no_update, no_update
     
     preset = presets_data[preset_index]
     criteria = preset.get("criteria", {})
@@ -920,6 +1070,7 @@ def load_filter_preset(preset_index, presets_data):
         creator_value,
         criteria.get("item_types", []),
         criteria.get("languages", []),
+        criteria.get("collections", []),
         criteria.get("start_year"),
         criteria.get("end_year")
     )
@@ -1116,19 +1267,18 @@ def load_collection_tags(n_clicks, collection_key, connection_type):
                 
         elif connection_type == "local":
             local_client = ZoteroLocalClient()
-            # collection_key is the collection ID for local client
-            try:
-                collection_id = int(collection_key)
-                tag_freq = local_client.get_tags_for_collection(collection_id)
+            # collection_key is now a string key for REST API
+            if collection_key == "disabled":
+                return no_update, dbc.Alert("Collections feature not available", color="warning")
                 
-                if tag_freq:
-                    tags_data = [{"tag": tag, "meta": {"numItems": count}} for tag, count in tag_freq.items()]
-                    info_msg = dbc.Alert(f"✅ Loaded {len(tag_freq)} tags from collection", color="success")
-                    return tags_data, info_msg
-                else:
-                    return no_update, dbc.Alert("No tags found in this collection", color="warning")
-            except ValueError:
-                return no_update, dbc.Alert("Invalid collection ID for local Zotero", color="danger")
+            tag_freq = local_client.get_tags_for_collection(collection_key)
+            
+            if tag_freq:
+                tags_data = [{"tag": tag, "meta": {"numItems": count}} for tag, count in tag_freq.items()]
+                info_msg = dbc.Alert(f"✅ Loaded {len(tag_freq)} tags from collection", color="success")
+                return tags_data, info_msg
+            else:
+                return no_update, dbc.Alert("No tags found in this collection", color="warning")
         
         return no_update, dbc.Alert("Collection loading not supported for current connection", color="warning")
         
